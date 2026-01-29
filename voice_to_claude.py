@@ -277,8 +277,27 @@ class AudioEngine:
 class TranscriptionEngine:
     """Handles speech-to-text using Lightning Whisper MLX."""
 
-    def __init__(self, model_name="base"):
+    # Supported languages (subset of Whisper's 99 languages)
+    LANGUAGES = {
+        "Auto-detect": None,
+        "English": "en",
+        "Spanish": "es",
+        "French": "fr",
+        "German": "de",
+        "Italian": "it",
+        "Portuguese": "pt",
+        "Dutch": "nl",
+        "Russian": "ru",
+        "Chinese": "zh",
+        "Japanese": "ja",
+        "Korean": "ko",
+        "Arabic": "ar",
+        "Hindi": "hi",
+    }
+
+    def __init__(self, model_name="base", language=None):
         self.model_name = model_name
+        self.language = language
         self.whisper = None
 
     def load_model(self):
@@ -290,13 +309,21 @@ class TranscriptionEngine:
             quant=None
         )
 
+    def set_language(self, language):
+        """Set the transcription language."""
+        self.language = language
+
     def transcribe(self, audio_file):
         """Transcribe an audio file to text."""
         if not self.whisper:
             return None
 
         try:
-            result = self.whisper.transcribe(audio_file)
+            # Pass language hint if set
+            kwargs = {}
+            if self.language:
+                kwargs['language'] = self.language
+            result = self.whisper.transcribe(audio_file, **kwargs)
             text = result.get("text", "").strip()
 
             if not text or len(text) < 3:
@@ -420,7 +447,10 @@ class VoiceToClaudeApp(rumps.App):
 
         # Initialize components
         self.audio_engine = AudioEngine(CONFIG, self.set_state)
-        self.transcription_engine = TranscriptionEngine(CONFIG["model"])
+        self.transcription_engine = TranscriptionEngine(
+            CONFIG["model"],
+            CONFIG.get("language")
+        )
         self.output_handler = OutputHandler()
 
         # Sensitivity levels
@@ -474,6 +504,16 @@ class VoiceToClaudeApp(rumps.App):
                 item.state = 1
             self.model_menu.add(item)
 
+        # Language submenu
+        self.language_menu = rumps.MenuItem("Language")
+        current_lang = CONFIG.get("language")
+        for name, code in TranscriptionEngine.LANGUAGES.items():
+            item = rumps.MenuItem(name, callback=self.set_language)
+            item.language_code = code
+            if code == current_lang:
+                item.state = 1
+            self.language_menu.add(item)
+
         # Sound effects toggle
         self.sound_item = rumps.MenuItem("Sound Effects", callback=self.toggle_sound)
         self.sound_item.state = 1 if CONFIG.get("sound_effects", True) else 0
@@ -498,6 +538,7 @@ class VoiceToClaudeApp(rumps.App):
             self.sensitivity_menu,
             self.output_menu,
             self.model_menu,
+            self.language_menu,
             self.device_menu,
             self.sound_item,
             None,
@@ -578,6 +619,18 @@ class VoiceToClaudeApp(rumps.App):
         CONFIG["sound_effects"] = not CONFIG.get("sound_effects", True)
         sender.state = 1 if CONFIG["sound_effects"] else 0
         save_config(CONFIG)
+
+    def set_language(self, sender):
+        """Set transcription language."""
+        lang_code = getattr(sender, 'language_code', None)
+        CONFIG["language"] = lang_code
+        self.transcription_engine.set_language(lang_code)
+        save_config(CONFIG)
+
+        # Update checkmarks
+        for item in self.language_menu.values():
+            expected_code = getattr(item, 'language_code', None)
+            item.state = 1 if expected_code == lang_code else 0
 
     def _populate_device_menu(self):
         """Populate the input device menu."""
