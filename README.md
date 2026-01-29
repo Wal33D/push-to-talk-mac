@@ -118,10 +118,15 @@ Click the menu bar icon to access:
 - **Sound Effects** - Toggle audio feedback
 - **Dictation Commands** - Toggle voice command processing
 - **Auto-Capitalize** - Capitalize first letter of transcriptions
+- **Smart Punctuation** - Auto-add period, capitalize after sentences
 - **Notifications** - Toggle macOS notifications
 - **Ready Sound** - Beep when ready to listen again
+- **Recording Sound** - Beep when recording starts
+- **Pause Duration** - Adjust wait time before sending (1-3 seconds)
+- **Undo Last** - Copy original text back to clipboard
 - **Recent Transcriptions** - Click to copy, export, or clear
 - **Session Stats** - Word and transcription count
+- **Voice Conversations** - Auto-stops `say` command when you speak
 
 ## Dictation Commands
 
@@ -260,6 +265,25 @@ Contributions welcome! Please open an issue or PR.
 MIT License - See [LICENSE](LICENSE) for details.
 
 ## Changelog
+
+### v1.6.1
+- Added recording sound option (beep when recording starts)
+- Better callback system for audio events
+
+### v1.6.0
+- Added smart punctuation (auto-period, capitalize after sentences)
+- Added text corrections (i -> I, i'm -> I'm, etc.)
+- Added "Undo Last" to copy original text back to clipboard
+
+### v1.5.0
+- Added pause duration control (1-3 seconds)
+- Auto-stops `say` command when user starts speaking (for voice conversations)
+- Code cleanup and proper import organization
+
+### v1.4.1
+- Improved hallucination filtering (catches numbers, percentages)
+- Raised default speech threshold to reduce false triggers
+- Added "Very Low" sensitivity for very noisy environments
 
 ### v1.4.0
 - Added auto-capitalize option (first letter of transcriptions)
