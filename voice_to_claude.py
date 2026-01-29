@@ -35,7 +35,7 @@ import pyaudio
 import pyperclip
 import rumps
 
-__version__ = "1.2.0"
+__version__ = "1.3.0"
 __author__ = "Waleed Judah"
 
 # ============================================================================
@@ -63,7 +63,8 @@ DEFAULT_CONFIG = {
     # Behavior
     "auto_send": True,
     "sound_effects": True,
-    "show_notifications": False,
+    "show_notifications": True,
+    "dictation_commands": True,
 
     # Stats
     "total_transcriptions": 0,
@@ -367,6 +368,119 @@ class TranscriptionEngine:
         return False
 
 # ============================================================================
+# DICTATION COMMANDS
+# ============================================================================
+
+class DictationProcessor:
+    """Processes dictation commands like 'new line', 'period', etc."""
+
+    # Voice commands mapped to their replacements
+    COMMANDS = {
+        # Punctuation
+        "period": ".",
+        "full stop": ".",
+        "comma": ",",
+        "question mark": "?",
+        "exclamation mark": "!",
+        "exclamation point": "!",
+        "colon": ":",
+        "semicolon": ";",
+        "hyphen": "-",
+        "dash": " - ",
+        "open quote": '"',
+        "close quote": '"',
+        "open paren": "(",
+        "close paren": ")",
+        "open bracket": "[",
+        "close bracket": "]",
+        "ellipsis": "...",
+
+        # Whitespace
+        "new line": "\n",
+        "newline": "\n",
+        "new paragraph": "\n\n",
+        "tab": "\t",
+        "space": " ",
+
+        # Special
+        "ampersand": "&",
+        "at sign": "@",
+        "hashtag": "#",
+        "hash": "#",
+        "dollar sign": "$",
+        "percent sign": "%",
+        "percent": "%",
+        "asterisk": "*",
+        "star": "*",
+        "plus sign": "+",
+        "plus": "+",
+        "minus sign": "-",
+        "minus": "-",
+        "equals sign": "=",
+        "equals": "=",
+        "slash": "/",
+        "forward slash": "/",
+        "backslash": "\\",
+        "back slash": "\\",
+        "underscore": "_",
+        "pipe": "|",
+        "tilde": "~",
+        "caret": "^",
+        "greater than": ">",
+        "less than": "<",
+
+        # Common programming
+        "arrow": "->",
+        "fat arrow": "=>",
+        "double colon": "::",
+        "triple dot": "...",
+
+        # Formatting
+        "all caps": "",  # Placeholder - handled specially
+        "capitalize": "",  # Placeholder - handled specially
+
+        # Common words/phrases
+        "smiley face": ":)",
+        "smiley": ":)",
+        "frown face": ":(",
+        "frowny face": ":(",
+        "wink": ";)",
+        "heart": "<3",
+    }
+
+    # Commands that should remove preceding space
+    NO_SPACE_BEFORE = {".", ",", "?", "!", ":", ";", ")", "]", '"'}
+
+    @classmethod
+    def process(cls, text, enabled=True):
+        """Process text and replace dictation commands."""
+        if not enabled:
+            return text
+
+        result = text
+
+        # Sort commands by length (longest first) to avoid partial matches
+        sorted_commands = sorted(cls.COMMANDS.keys(), key=len, reverse=True)
+
+        for command in sorted_commands:
+            replacement = cls.COMMANDS[command]
+
+            # Case-insensitive replacement
+            import re
+            pattern = re.compile(re.escape(command), re.IGNORECASE)
+            result = pattern.sub(replacement, result)
+
+        # Clean up spacing around punctuation
+        for punct in cls.NO_SPACE_BEFORE:
+            result = result.replace(f" {punct}", punct)
+
+        # Remove double spaces
+        while "  " in result:
+            result = result.replace("  ", " ")
+
+        return result.strip()
+
+# ============================================================================
 # OUTPUT HANDLER
 # ============================================================================
 
@@ -416,10 +530,59 @@ class OutputHandler:
         return True
 
     @staticmethod
+    def type_text(text):
+        """Type text character by character (for apps that don't support paste)."""
+        # Escape special characters for AppleScript
+        escaped = text.replace('\\', '\\\\').replace('"', '\\"')
+
+        script = f'''
+        tell application "System Events"
+            keystroke "{escaped}"
+        end tell
+        '''
+        try:
+            subprocess.run(['osascript', '-e', script], check=True,
+                         capture_output=True, timeout=30)
+            return True
+        except Exception:
+            return False
+
+    @staticmethod
+    def type_and_send(text):
+        """Type text and press Enter."""
+        escaped = text.replace('\\', '\\\\').replace('"', '\\"')
+
+        script = f'''
+        tell application "System Events"
+            keystroke "{escaped}"
+            delay 0.1
+            keystroke return
+        end tell
+        '''
+        try:
+            subprocess.run(['osascript', '-e', script], check=True,
+                         capture_output=True, timeout=30)
+            return True
+        except Exception:
+            return False
+
+    @staticmethod
     def play_sound(sound_name):
         """Play a system sound."""
         try:
             subprocess.run(['afplay', f'/System/Library/Sounds/{sound_name}.aiff'],
+                         capture_output=True, timeout=2)
+        except Exception:
+            pass
+
+    @staticmethod
+    def show_notification(title, message, sound=False):
+        """Show a macOS notification."""
+        script = f'''
+        display notification "{message}" with title "{title}"
+        '''
+        try:
+            subprocess.run(['osascript', '-e', script],
                          capture_output=True, timeout=2)
         except Exception:
             pass
@@ -464,6 +627,8 @@ class VoiceToClaudeApp(rumps.App):
         self.output_modes = {
             "Paste + Send": "paste_send",
             "Paste Only": "paste_only",
+            "Type + Send": "type_send",
+            "Type Only": "type_only",
             "Copy Only": "copy_only",
         }
 
@@ -518,6 +683,14 @@ class VoiceToClaudeApp(rumps.App):
         self.sound_item = rumps.MenuItem("Sound Effects", callback=self.toggle_sound)
         self.sound_item.state = 1 if CONFIG.get("sound_effects", True) else 0
 
+        # Dictation commands toggle
+        self.dictation_item = rumps.MenuItem("Dictation Commands", callback=self.toggle_dictation)
+        self.dictation_item.state = 1 if CONFIG.get("dictation_commands", True) else 0
+
+        # Notifications toggle
+        self.notif_item = rumps.MenuItem("Notifications", callback=self.toggle_notifications)
+        self.notif_item.state = 1 if CONFIG.get("show_notifications", True) else 0
+
         # Input device submenu
         self.device_menu = rumps.MenuItem("Input Device")
         self._populate_device_menu()
@@ -525,6 +698,9 @@ class VoiceToClaudeApp(rumps.App):
         # Recent transcriptions submenu
         self.recent_menu = rumps.MenuItem("Recent Transcriptions")
         self.recent_menu.add(rumps.MenuItem("(none yet)"))
+        self.recent_menu.add(None)  # Separator
+        self.recent_menu.add(rumps.MenuItem("Export History...", callback=self.export_history))
+        self.recent_menu.add(rumps.MenuItem("Clear History", callback=self.clear_history))
 
         # Calibrate option
         self.calibrate_item = rumps.MenuItem("Calibrate Microphone", callback=self.calibrate_mic)
@@ -540,7 +716,10 @@ class VoiceToClaudeApp(rumps.App):
             self.model_menu,
             self.language_menu,
             self.device_menu,
+            None,
             self.sound_item,
+            self.dictation_item,
+            self.notif_item,
             None,
             self.calibrate_item,
             self.recent_menu,
@@ -618,6 +797,18 @@ class VoiceToClaudeApp(rumps.App):
         """Toggle sound effects."""
         CONFIG["sound_effects"] = not CONFIG.get("sound_effects", True)
         sender.state = 1 if CONFIG["sound_effects"] else 0
+        save_config(CONFIG)
+
+    def toggle_dictation(self, sender):
+        """Toggle dictation commands processing."""
+        CONFIG["dictation_commands"] = not CONFIG.get("dictation_commands", True)
+        sender.state = 1 if CONFIG["dictation_commands"] else 0
+        save_config(CONFIG)
+
+    def toggle_notifications(self, sender):
+        """Toggle macOS notifications."""
+        CONFIG["show_notifications"] = not CONFIG.get("show_notifications", True)
+        sender.state = 1 if CONFIG["show_notifications"] else 0
         save_config(CONFIG)
 
     def set_language(self, sender):
@@ -762,18 +953,84 @@ class VoiceToClaudeApp(rumps.App):
         # Truncate long text
         display_text = text[:50] + "..." if len(text) > 50 else text
         timestamp = datetime.now().strftime("%H:%M")
+        full_timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
-        self.recent_transcriptions.insert(0, (timestamp, text, display_text))
+        self.recent_transcriptions.insert(0, (timestamp, full_timestamp, text, display_text))
         self.recent_transcriptions = self.recent_transcriptions[:10]  # Keep last 10
 
-        # Update menu
-        self.recent_menu.clear()
-        for ts, full_text, display in self.recent_transcriptions:
-            item = rumps.MenuItem(
-                f"[{ts}] {display}",
-                callback=lambda sender, t=full_text: pyperclip.copy(t)
+        # Update menu (keep export/clear at bottom)
+        self._rebuild_recent_menu()
+
+    def _rebuild_recent_menu(self):
+        """Rebuild the recent transcriptions menu."""
+        # Clear and rebuild
+        keys_to_remove = [k for k in self.recent_menu.keys()
+                         if k not in ["Export History...", "Clear History"]]
+        for key in keys_to_remove:
+            del self.recent_menu[key]
+
+        # Add transcriptions at the top
+        if not self.recent_transcriptions:
+            self.recent_menu["(none yet)"] = rumps.MenuItem("(none yet)")
+        else:
+            for ts, full_ts, full_text, display in reversed(self.recent_transcriptions):
+                item = rumps.MenuItem(
+                    f"[{ts}] {display}",
+                    callback=lambda sender, t=full_text: pyperclip.copy(t)
+                )
+                self.recent_menu.add(item)
+
+    def export_history(self, sender):
+        """Export transcription history to a file."""
+        if not self.recent_transcriptions:
+            rumps.alert(title="Export", message="No transcriptions to export.", ok="OK")
+            return
+
+        # Build export text
+        lines = ["Voice to Claude - Transcription History", "=" * 40, ""]
+        for ts, full_ts, text, _ in self.recent_transcriptions:
+            lines.append(f"[{full_ts}]")
+            lines.append(text)
+            lines.append("")
+
+        export_text = "\n".join(lines)
+
+        # Copy to clipboard and save to file
+        pyperclip.copy(export_text)
+
+        export_path = Path.home() / "Desktop" / f"voice-transcriptions-{datetime.now().strftime('%Y%m%d-%H%M%S')}.txt"
+        try:
+            with open(export_path, 'w') as f:
+                f.write(export_text)
+            rumps.alert(
+                title="Export Complete",
+                message=f"Exported {len(self.recent_transcriptions)} transcriptions.\n\n"
+                        f"Saved to: {export_path}\n"
+                        f"Also copied to clipboard.",
+                ok="OK"
             )
-            self.recent_menu.add(item)
+        except Exception as e:
+            rumps.alert(
+                title="Export",
+                message=f"Copied to clipboard.\n\nCould not save file: {e}",
+                ok="OK"
+            )
+
+    def clear_history(self, sender):
+        """Clear transcription history."""
+        if not self.recent_transcriptions:
+            return
+
+        result = rumps.alert(
+            title="Clear History",
+            message=f"Clear {len(self.recent_transcriptions)} transcriptions?",
+            ok="Clear",
+            cancel="Cancel"
+        )
+
+        if result == 1:
+            self.recent_transcriptions = []
+            self._rebuild_recent_menu()
 
     def update_stats(self, text):
         """Update session statistics."""
@@ -831,21 +1088,39 @@ class VoiceToClaudeApp(rumps.App):
                 if text and self.running and not self.paused:
                     self.set_state(State.SENDING)
 
+                    # Process dictation commands
+                    processed_text = DictationProcessor.process(
+                        text,
+                        enabled=CONFIG.get("dictation_commands", True)
+                    )
+
                     # Update stats and history
-                    self.update_stats(text)
-                    self.add_recent_transcription(text)
+                    self.update_stats(processed_text)
+                    self.add_recent_transcription(processed_text)
 
                     # Output based on mode
                     output_mode = CONFIG.get("output_mode", "paste_send")
                     if output_mode == "paste_send":
-                        self.output_handler.paste_and_send(text)
+                        self.output_handler.paste_and_send(processed_text)
                     elif output_mode == "paste_only":
-                        self.output_handler.paste_only(text)
+                        self.output_handler.paste_only(processed_text)
+                    elif output_mode == "type_send":
+                        self.output_handler.type_and_send(processed_text)
+                    elif output_mode == "type_only":
+                        self.output_handler.type_text(processed_text)
                     else:
-                        self.output_handler.copy_only(text)
+                        self.output_handler.copy_only(processed_text)
 
                     if CONFIG.get("sound_effects"):
                         self.output_handler.play_sound("Tink")
+
+                    # Show notification
+                    if CONFIG.get("show_notifications"):
+                        preview = processed_text[:50] + "..." if len(processed_text) > 50 else processed_text
+                        self.output_handler.show_notification(
+                            "Voice to Claude",
+                            preview
+                        )
 
                     time.sleep(0.3)
 

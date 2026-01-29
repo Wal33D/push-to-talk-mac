@@ -22,10 +22,12 @@ Perfect for dictating to Claude Code, ChatGPT, or any text input without touchin
 - **Microphone Calibration** - Measure ambient noise and auto-set threshold
 - **Input Device Selection** - Choose which microphone to use
 - **Language Selection** - 14 languages including auto-detect
+- **Dictation Commands** - Say "period", "new line", "comma" etc.
+- **macOS Notifications** - Optional transcription notifications
 - **Hallucination Filtering** - Filters out Whisper junk from background noise
 - **Persistent Settings** - Config saved between sessions
 - **Sound Effects** - Audio feedback for state changes
-- **Transcription History** - View and copy recent transcriptions
+- **Transcription History** - View, copy, and export recent transcriptions
 - **Session & Lifetime Statistics** - Track words and transcriptions
 - **Launch at Login** - Optional auto-start
 - **Smart Timeouts** - Auto-reset after 30s idle, max 2min recording
@@ -95,8 +97,10 @@ Click the menu bar icon to access:
   - Medium (default)
   - High (quiet room)
 - **Output Mode**
-  - Paste + Send - Paste and press Enter
+  - Paste + Send - Paste and press Enter (fastest)
   - Paste Only - Just paste, no Enter
+  - Type + Send - Type text and press Enter (for apps that block paste)
+  - Type Only - Type text character by character
   - Copy Only - Just copy to clipboard
 - **Whisper Model**
   - Base (fast) - Quicker, less accurate
@@ -107,8 +111,51 @@ Click the menu bar icon to access:
   - Portuguese, Dutch, Russian
   - Chinese, Japanese, Korean, Arabic, Hindi
 - **Sound Effects** - Toggle audio feedback
-- **Recent Transcriptions** - Click to copy
+- **Dictation Commands** - Toggle voice command processing
+- **Notifications** - Toggle macOS notifications
+- **Recent Transcriptions** - Click to copy, export, or clear
 - **Session Stats** - Word and transcription count
+
+## Dictation Commands
+
+When enabled, you can speak these commands and they'll be replaced:
+
+### Punctuation
+| Say | Get |
+|-----|-----|
+| "period" / "full stop" | . |
+| "comma" | , |
+| "question mark" | ? |
+| "exclamation mark" | ! |
+| "colon" | : |
+| "semicolon" | ; |
+| "hyphen" | - |
+| "dash" | - |
+| "open quote" / "close quote" | " |
+| "open paren" / "close paren" | ( ) |
+| "ellipsis" | ... |
+
+### Whitespace
+| Say | Get |
+|-----|-----|
+| "new line" / "newline" | (line break) |
+| "new paragraph" | (double line break) |
+| "tab" | (tab character) |
+
+### Symbols
+| Say | Get |
+|-----|-----|
+| "at sign" | @ |
+| "hashtag" / "hash" | # |
+| "ampersand" | & |
+| "dollar sign" | $ |
+| "percent" | % |
+| "asterisk" | * |
+| "slash" | / |
+| "underscore" | _ |
+| "arrow" | -> |
+
+**Example**: Say "Hello comma how are you question mark" to get "Hello, how are you?"
 
 ## Configuration
 
@@ -206,6 +253,13 @@ Contributions welcome! Please open an issue or PR.
 MIT License - See [LICENSE](LICENSE) for details.
 
 ## Changelog
+
+### v1.3.0
+- Added dictation commands (period, comma, new line, etc.)
+- Added macOS notifications toggle
+- Added export transcription history to file
+- Added clear transcription history option
+- Improved menu organization
 
 ### v1.2.0
 - Added microphone calibration tool
