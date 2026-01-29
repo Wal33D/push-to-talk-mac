@@ -36,7 +36,7 @@ import pyaudio
 import pyperclip
 import rumps
 
-__version__ = "1.6.0"
+__version__ = "1.6.1"
 __author__ = "Waleed Judah"
 
 # ============================================================================
@@ -76,6 +76,7 @@ DEFAULT_CONFIG = {
     # Advanced
     "send_key": "return",  # Options: return, ctrl_return, cmd_return
     "ready_sound": False,  # Play sound when ready to listen again
+    "recording_sound": False,  # Play sound when recording starts
     "custom_replacements": {},  # User-defined text replacements
 }
 
@@ -148,9 +149,10 @@ STATE_DESCRIPTIONS = {
 class AudioEngine:
     """Handles microphone input and voice activity detection."""
 
-    def __init__(self, config, state_callback):
+    def __init__(self, config, state_callback, recording_callback=None):
         self.config = config
         self.state_callback = state_callback
+        self.recording_callback = recording_callback  # Called when recording starts
         self.running = False
         self.paused = False
         self.device_index = config.get("input_device", None)
@@ -248,6 +250,9 @@ class AudioEngine:
                         has_speech = True
                         # Stop any TTS (say command) when user starts speaking
                         OutputHandler.stop_speaking()
+                        # Notify that recording started
+                        if self.recording_callback:
+                            self.recording_callback()
                         self.state_callback(State.SPEAKING)
                 else:
                     if has_speech:
@@ -705,7 +710,7 @@ class VoiceToClaudeApp(rumps.App):
         self.last_processed_text = None
 
         # Initialize components
-        self.audio_engine = AudioEngine(CONFIG, self.set_state)
+        self.audio_engine = AudioEngine(CONFIG, self.set_state, self.on_recording_start)
         self.transcription_engine = TranscriptionEngine(
             CONFIG["model"],
             CONFIG.get("language")
@@ -835,6 +840,10 @@ class VoiceToClaudeApp(rumps.App):
         self.ready_sound_item = rumps.MenuItem("Ready Sound", callback=self.toggle_ready_sound)
         self.ready_sound_item.state = 1 if CONFIG.get("ready_sound", False) else 0
 
+        # Recording sound toggle
+        self.recording_sound_item = rumps.MenuItem("Recording Sound", callback=self.toggle_recording_sound)
+        self.recording_sound_item.state = 1 if CONFIG.get("recording_sound", False) else 0
+
         # Input device submenu
         self.device_menu = rumps.MenuItem("Input Device")
         self._populate_device_menu()
@@ -878,6 +887,7 @@ class VoiceToClaudeApp(rumps.App):
             self.smart_punct_item,
             self.notif_item,
             self.ready_sound_item,
+            self.recording_sound_item,
             None,
             self.calibrate_item,
             self.test_mic_item,
@@ -898,6 +908,15 @@ class VoiceToClaudeApp(rumps.App):
             self.status_item.title = f"Status: {STATE_DESCRIPTIONS.get(state, state)}"
         except:
             pass
+
+    def on_recording_start(self):
+        """Called when recording starts (speech detected)."""
+        if CONFIG.get("recording_sound"):
+            # Play in a thread to not block recording
+            threading.Thread(
+                target=lambda: self.output_handler.play_sound("Morse"),
+                daemon=True
+            ).start()
 
     def toggle_pause(self, sender):
         """Toggle pause/resume listening."""
@@ -1009,6 +1028,12 @@ class VoiceToClaudeApp(rumps.App):
         """Toggle ready sound (beep when ready to listen again)."""
         CONFIG["ready_sound"] = not CONFIG.get("ready_sound", False)
         sender.state = 1 if CONFIG["ready_sound"] else 0
+        save_config(CONFIG)
+
+    def toggle_recording_sound(self, sender):
+        """Toggle recording sound (beep when recording starts)."""
+        CONFIG["recording_sound"] = not CONFIG.get("recording_sound", False)
+        sender.state = 1 if CONFIG["recording_sound"] else 0
         save_config(CONFIG)
 
     def set_language(self, sender):
