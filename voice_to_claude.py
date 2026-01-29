@@ -35,7 +35,7 @@ import pyaudio
 import pyperclip
 import rumps
 
-__version__ = "1.3.0"
+__version__ = "1.3.1"
 __author__ = "Waleed Judah"
 
 # ============================================================================
@@ -705,6 +705,12 @@ class VoiceToClaudeApp(rumps.App):
         # Calibrate option
         self.calibrate_item = rumps.MenuItem("Calibrate Microphone", callback=self.calibrate_mic)
 
+        # Test microphone
+        self.test_mic_item = rumps.MenuItem("Test Microphone", callback=self.test_microphone)
+
+        # Quick Help
+        self.help_item = rumps.MenuItem("Quick Help", callback=self.show_help)
+
         # About
         self.about_item = rumps.MenuItem(f"About (v{__version__})", callback=self.show_about)
 
@@ -722,10 +728,12 @@ class VoiceToClaudeApp(rumps.App):
             self.notif_item,
             None,
             self.calibrate_item,
+            self.test_mic_item,
             self.recent_menu,
             self.stats_item,
             self.status_item,
             None,
+            self.help_item,
             self.about_item,
         ]
 
@@ -929,6 +937,101 @@ class VoiceToClaudeApp(rumps.App):
         if not was_paused:
             self.paused = False
             self.audio_engine.paused = False
+
+    def test_microphone(self, sender):
+        """Test microphone with live audio level display."""
+        was_paused = self.paused
+        self.paused = True
+        self.audio_engine.paused = True
+
+        try:
+            p = pyaudio.PyAudio()
+            stream_kwargs = {
+                'format': pyaudio.paInt16,
+                'channels': CONFIG["channels"],
+                'rate': CONFIG["rate"],
+                'input': True,
+                'frames_per_buffer': CONFIG["chunk"],
+            }
+            if CONFIG.get("input_device") is not None:
+                stream_kwargs['input_device_index'] = CONFIG["input_device"]
+
+            stream = p.open(**stream_kwargs)
+
+            # Collect samples for 5 seconds
+            samples = []
+            duration = 5
+            chunks_per_sec = CONFIG["rate"] // CONFIG["chunk"]
+
+            self.title = "🎚️"  # Indicate testing
+
+            for i in range(duration * chunks_per_sec):
+                data = stream.read(CONFIG["chunk"], exception_on_overflow=False)
+                level = self.audio_engine.get_audio_level(data)
+                samples.append(level)
+
+                # Update title with level bar
+                bar_len = min(10, level // 300)
+                bar = "█" * bar_len + "░" * (10 - bar_len)
+                self.title = f"🎚️{bar}"
+
+            stream.stop_stream()
+            stream.close()
+            p.terminate()
+
+            avg = sum(samples) / len(samples)
+            peak = max(samples)
+            min_level = min(samples)
+
+            threshold = CONFIG["speech_threshold"]
+            status = "✓ Good" if peak > threshold else "⚠ Too quiet"
+
+            rumps.alert(
+                title="Microphone Test Complete",
+                message=f"5-second test results:\n\n"
+                        f"  Average: {int(avg)}\n"
+                        f"  Peak: {int(peak)}\n"
+                        f"  Minimum: {int(min_level)}\n\n"
+                        f"  Speech threshold: {threshold}\n"
+                        f"  Status: {status}\n\n"
+                        f"If status shows 'Too quiet', try:\n"
+                        f"  • Speaking louder\n"
+                        f"  • Moving closer to mic\n"
+                        f"  • Lowering sensitivity setting",
+                ok="OK"
+            )
+
+        except Exception as e:
+            rumps.alert(title="Test Failed", message=str(e))
+
+        # Resume if wasn't paused
+        if not was_paused:
+            self.paused = False
+            self.audio_engine.paused = False
+        self.set_state(State.PAUSED if self.paused else State.READY)
+
+    def show_help(self, sender):
+        """Show quick help dialog."""
+        rumps.alert(
+            title="Voice to Claude - Quick Help",
+            message="How to use:\n\n"
+                    "1. Look for 🎤 in the menu bar (ready state)\n"
+                    "2. Speak naturally - it auto-detects speech\n"
+                    "3. Pause briefly when done speaking\n"
+                    "4. Text is transcribed and pasted\n\n"
+                    "Icon states:\n"
+                    "  🎤 Ready - listening for speech\n"
+                    "  👂 Detecting - heard something\n"
+                    "  🗣 Recording - capturing speech\n"
+                    "  ⚙️ Processing - transcribing\n"
+                    "  ⏸ Paused - click to resume\n\n"
+                    "Tips:\n"
+                    "  • Say 'period', 'comma', 'new line'\n"
+                    "  • Adjust sensitivity for your room\n"
+                    "  • Use Calibrate to auto-tune\n\n"
+                    "For full docs: github.com/Wal33D/voice-to-claude",
+            ok="Got it"
+        )
 
     def show_about(self, sender):
         """Show about dialog."""
