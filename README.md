@@ -21,6 +21,7 @@ Perfect for dictating to Claude Code, ChatGPT, or any text input without touchin
 - **Adjustable Sensitivity** - Low/Medium/High presets for different noise levels
 - **Microphone Calibration** - Measure ambient noise and auto-set threshold
 - **Input Device Selection** - Choose which microphone to use
+- **Language Selection** - 14 languages including auto-detect
 - **Hallucination Filtering** - Filters out Whisper junk from background noise
 - **Persistent Settings** - Config saved between sessions
 - **Sound Effects** - Audio feedback for state changes
@@ -100,6 +101,11 @@ Click the menu bar icon to access:
 - **Whisper Model**
   - Base (fast) - Quicker, less accurate
   - Small (accurate) - Slower, more accurate
+- **Language** - Select transcription language
+  - Auto-detect (default)
+  - English, Spanish, French, German, Italian
+  - Portuguese, Dutch, Russian
+  - Chinese, Japanese, Korean, Arabic, Hindi
 - **Sound Effects** - Toggle audio feedback
 - **Recent Transcriptions** - Click to copy
 - **Session Stats** - Word and transcription count
