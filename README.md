@@ -117,7 +117,9 @@ Click the menu bar icon to access:
   - Chinese, Japanese, Korean, Arabic, Hindi
 - **Sound Effects** - Toggle audio feedback
 - **Dictation Commands** - Toggle voice command processing
+- **Auto-Capitalize** - Capitalize first letter of transcriptions
 - **Notifications** - Toggle macOS notifications
+- **Ready Sound** - Beep when ready to listen again
 - **Recent Transcriptions** - Click to copy, export, or clear
 - **Session Stats** - Word and transcription count
 
@@ -259,7 +261,9 @@ MIT License - See [LICENSE](LICENSE) for details.
 
 ## Changelog
 
-### v1.3.2
+### v1.4.0
+- Added auto-capitalize option (first letter of transcriptions)
+- Added ready sound option (beep when ready to listen again)
 - Added customizable send key (Enter, Ctrl+Enter, Cmd+Enter, Shift+Enter)
 - Added microphone test with live audio level visualization
 - Added quick help dialog

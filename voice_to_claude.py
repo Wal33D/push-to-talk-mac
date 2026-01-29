@@ -35,7 +35,7 @@ import pyaudio
 import pyperclip
 import rumps
 
-__version__ = "1.3.3"
+__version__ = "1.4.0"
 __author__ = "Waleed Judah"
 
 # ============================================================================
@@ -65,6 +65,7 @@ DEFAULT_CONFIG = {
     "sound_effects": True,
     "show_notifications": True,
     "dictation_commands": True,
+    "auto_capitalize": True,  # Capitalize first letter of transcriptions
 
     # Stats
     "total_transcriptions": 0,
@@ -457,36 +458,43 @@ class DictationProcessor:
     NO_SPACE_BEFORE = {".", ",", "?", "!", ":", ";", ")", "]", '"'}
 
     @classmethod
-    def process(cls, text, enabled=True):
+    def process(cls, text, enabled=True, auto_capitalize=True):
         """Process text and replace dictation commands."""
-        if not enabled:
+        if not enabled and not auto_capitalize:
             return text
 
         result = text
 
-        # Sort commands by length (longest first) to avoid partial matches
-        sorted_commands = sorted(cls.COMMANDS.keys(), key=len, reverse=True)
+        if enabled:
+            # Sort commands by length (longest first) to avoid partial matches
+            sorted_commands = sorted(cls.COMMANDS.keys(), key=len, reverse=True)
 
-        import re
-        for command in sorted_commands:
-            replacement = cls.COMMANDS[command]
+            import re
+            for command in sorted_commands:
+                replacement = cls.COMMANDS[command]
 
-            # Case-insensitive replacement
-            # Use re.escape on replacement to handle special chars like backslash
-            pattern = re.compile(re.escape(command), re.IGNORECASE)
-            # For sub(), backslash needs to be escaped in replacement string
-            safe_replacement = replacement.replace('\\', '\\\\')
-            result = pattern.sub(safe_replacement, result)
+                # Case-insensitive replacement
+                # Use re.escape on replacement to handle special chars like backslash
+                pattern = re.compile(re.escape(command), re.IGNORECASE)
+                # For sub(), backslash needs to be escaped in replacement string
+                safe_replacement = replacement.replace('\\', '\\\\')
+                result = pattern.sub(safe_replacement, result)
 
-        # Clean up spacing around punctuation
-        for punct in cls.NO_SPACE_BEFORE:
-            result = result.replace(f" {punct}", punct)
+            # Clean up spacing around punctuation
+            for punct in cls.NO_SPACE_BEFORE:
+                result = result.replace(f" {punct}", punct)
 
-        # Remove double spaces
-        while "  " in result:
-            result = result.replace("  ", " ")
+            # Remove double spaces
+            while "  " in result:
+                result = result.replace("  ", " ")
 
-        return result.strip()
+        result = result.strip()
+
+        # Auto-capitalize first letter
+        if auto_capitalize and result:
+            result = result[0].upper() + result[1:]
+
+        return result
 
 # ============================================================================
 # OUTPUT HANDLER
@@ -731,6 +739,10 @@ class VoiceToClaudeApp(rumps.App):
         self.dictation_item = rumps.MenuItem("Dictation Commands", callback=self.toggle_dictation)
         self.dictation_item.state = 1 if CONFIG.get("dictation_commands", True) else 0
 
+        # Auto-capitalize toggle
+        self.capitalize_item = rumps.MenuItem("Auto-Capitalize", callback=self.toggle_capitalize)
+        self.capitalize_item.state = 1 if CONFIG.get("auto_capitalize", True) else 0
+
         # Notifications toggle
         self.notif_item = rumps.MenuItem("Notifications", callback=self.toggle_notifications)
         self.notif_item.state = 1 if CONFIG.get("show_notifications", True) else 0
@@ -774,6 +786,7 @@ class VoiceToClaudeApp(rumps.App):
             None,
             self.sound_item,
             self.dictation_item,
+            self.capitalize_item,
             self.notif_item,
             self.ready_sound_item,
             None,
@@ -871,6 +884,12 @@ class VoiceToClaudeApp(rumps.App):
         """Toggle dictation commands processing."""
         CONFIG["dictation_commands"] = not CONFIG.get("dictation_commands", True)
         sender.state = 1 if CONFIG["dictation_commands"] else 0
+        save_config(CONFIG)
+
+    def toggle_capitalize(self, sender):
+        """Toggle auto-capitalize first letter."""
+        CONFIG["auto_capitalize"] = not CONFIG.get("auto_capitalize", True)
+        sender.state = 1 if CONFIG["auto_capitalize"] else 0
         save_config(CONFIG)
 
     def toggle_notifications(self, sender):
@@ -1257,10 +1276,11 @@ class VoiceToClaudeApp(rumps.App):
                 if text and self.running and not self.paused:
                     self.set_state(State.SENDING)
 
-                    # Process dictation commands
+                    # Process dictation commands and capitalize
                     processed_text = DictationProcessor.process(
                         text,
-                        enabled=CONFIG.get("dictation_commands", True)
+                        enabled=CONFIG.get("dictation_commands", True),
+                        auto_capitalize=CONFIG.get("auto_capitalize", True)
                     )
 
                     # Update stats and history
