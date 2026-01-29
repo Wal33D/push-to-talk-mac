@@ -19,6 +19,7 @@ Requirements:
 import os
 import sys
 import json
+import re
 import threading
 import tempfile
 import wave
@@ -35,7 +36,7 @@ import pyaudio
 import pyperclip
 import rumps
 
-__version__ = "1.4.1"
+__version__ = "1.5.0"
 __author__ = "Waleed Judah"
 
 # ============================================================================
@@ -57,7 +58,7 @@ DEFAULT_CONFIG = {
     # Voice detection
     "silence_threshold": 800,
     "speech_threshold": 2000,  # Raised from 1500 to reduce false triggers
-    "silence_duration": 1.0,
+    "silence_duration": 2.5,  # Seconds of silence before sending
     "min_speech_duration": 0.3,
 
     # Behavior
@@ -244,6 +245,8 @@ class AudioEngine:
 
                     if speech_chunks >= chunks_for_min_speech and not has_speech:
                         has_speech = True
+                        # Stop any TTS (say command) when user starts speaking
+                        OutputHandler.stop_speaking()
                         self.state_callback(State.SPEAKING)
                 else:
                     if has_speech:
@@ -346,8 +349,6 @@ class TranscriptionEngine:
 
     def _is_hallucination(self, text):
         """Filter out Whisper hallucinations (junk output on noise)."""
-        import re
-
         text_stripped = text.strip()
         text_lower = text_stripped.lower()
 
@@ -497,7 +498,6 @@ class DictationProcessor:
             # Sort commands by length (longest first) to avoid partial matches
             sorted_commands = sorted(cls.COMMANDS.keys(), key=len, reverse=True)
 
-            import re
             for command in sorted_commands:
                 replacement = cls.COMMANDS[command]
 
@@ -640,6 +640,14 @@ class OutputHandler:
             pass
 
     @staticmethod
+    def stop_speaking():
+        """Stop any currently running say command."""
+        try:
+            subprocess.run(['pkill', '-x', 'say'], capture_output=True, timeout=2)
+        except Exception:
+            pass
+
+    @staticmethod
     def show_notification(title, message, sound=False):
         """Show a macOS notification."""
         script = f'''
@@ -688,6 +696,15 @@ class VoiceToClaudeApp(rumps.App):
             "High (quiet room)": 1200,
         }
 
+        # Pause duration options (how long to wait after silence before sending)
+        self.pause_durations = {
+            "Short (1s)": 1.0,
+            "Medium (1.5s)": 1.5,
+            "Long (2s)": 2.0,
+            "Very Long (2.5s)": 2.5,
+            "Extra Long (3s)": 3.0,
+        }
+
         # Output modes
         self.output_modes = {
             "Paste + Send": "paste_send",
@@ -715,6 +732,16 @@ class VoiceToClaudeApp(rumps.App):
             if value == CONFIG["speech_threshold"]:
                 item.state = 1
             self.sensitivity_menu.add(item)
+
+        # Pause duration submenu
+        self.pause_menu = rumps.MenuItem("Pause Duration")
+        current_pause = CONFIG.get("silence_duration", 2.5)
+        for name, value in self.pause_durations.items():
+            item = rumps.MenuItem(name, callback=self.set_pause_duration)
+            item.duration_value = value
+            if abs(value - current_pause) < 0.1:  # Float comparison
+                item.state = 1
+            self.pause_menu.add(item)
 
         # Output mode submenu
         self.output_menu = rumps.MenuItem("Output Mode")
@@ -807,6 +834,7 @@ class VoiceToClaudeApp(rumps.App):
             rumps.MenuItem("Pause", callback=self.toggle_pause),
             None,
             self.sensitivity_menu,
+            self.pause_menu,
             self.output_menu,
             self.send_key_menu,
             self.model_menu,
@@ -857,13 +885,24 @@ class VoiceToClaudeApp(rumps.App):
 
     def set_sensitivity(self, sender):
         """Change microphone sensitivity."""
-        new_threshold = self.sensitivity_levels.get(sender.title, 1500)
+        new_threshold = self.sensitivity_levels.get(sender.title, 2000)
         CONFIG["speech_threshold"] = new_threshold
         self.audio_engine.config["speech_threshold"] = new_threshold
         save_config(CONFIG)
 
         for item in self.sensitivity_menu.values():
             item.state = 1 if item.title == sender.title else 0
+
+    def set_pause_duration(self, sender):
+        """Change how long to wait after silence before sending."""
+        duration = getattr(sender, 'duration_value', 2.5)
+        CONFIG["silence_duration"] = duration
+        self.audio_engine.config["silence_duration"] = duration
+        save_config(CONFIG)
+
+        for item in self.pause_menu.values():
+            expected = getattr(item, 'duration_value', None)
+            item.state = 1 if expected == duration else 0
 
     def set_output_mode(self, sender):
         """Change output mode."""
