@@ -36,7 +36,7 @@ import pyaudio
 import pyperclip
 import rumps
 
-__version__ = "1.8.0"
+__version__ = "1.8.1"
 __author__ = "Waleed Judah"
 
 # ============================================================================
@@ -371,40 +371,100 @@ class TranscriptionEngine:
         if re.match(r'^[\d\.\,\%\s\-\!\?\.\,\:\;]+$', text_stripped):
             return True
 
-        # Common junk patterns
+        # Timestamps like "00:00", "1:23", "12:34:56"
+        if re.match(r'^[\d\:\s]+$', text_stripped):
+            return True
+
+        # Music notes, symbols, special characters
+        if re.match(r'^[♪♫♬\*\-\_\.\s]+$', text_stripped):
+            return True
+
+        # Foreign characters that are likely noise (Chinese/Japanese/Korean single chars)
+        if len(text_stripped) <= 3 and re.match(r'^[\u4e00-\u9fff\u3040-\u309f\u30a0-\u30ff\uac00-\ud7af]+$', text_stripped):
+            return True
+
+        # Common junk patterns (Whisper hallucinations)
         junk_patterns = [
-            "1.1", "1.5", "2.0", "...", "♪", "***", "---", "___",
+            # Numbers and decimals
+            "1.1", "1.5", "2.0", "0.5", "1.0", "2.5", "3.0",
+            # Symbols
+            "...", "♪", "***", "---", "___", "…", "・・・",
+            # YouTube/video endings
             "Thank you", "Thanks for watching", "Thanks for listening",
-            "Subscribe", "Bye", "See you", "Goodbye",
-            "Please subscribe", "Like and subscribe",
-            "Thank you for watching", "You're welcome",
-            "I'm sorry", "Okay", "OK", "Hmm", "Uh",
-            "silence", "music", "applause", "laughter",
+            "Subscribe", "Bye", "See you", "Goodbye", "See you next time",
+            "Please subscribe", "Like and subscribe", "Hit the bell",
+            "Thank you for watching", "You're welcome", "Don't forget to",
+            # Whisper artifacts
+            "I'm sorry", "Hmm", "Uh", "Um", "Huh",
+            "silence", "music", "applause", "laughter", "background noise",
+            "[Music]", "[Applause]", "[Laughter]", "(music)", "(applause)",
+            # Very short common words (when alone)
+            "you", "the", "a", "to", "is", "it", "and", "of", "in", "on",
+            # Sounds
+            "Shhh", "Shh", "Ssh", "Psst", "Sss",
+            "Mm-hmm", "Uh-huh", "Mhm", "Mmm", "Uh huh",
+            "Oh", "Ah", "Eh", "Ooh", "Aah",
+            "Yeah", "Yep", "Nope", "Yup", "Nah",
+            "Ha", "Haha", "Hehe", "Lol",
+            # Attribution text
+            "Transcribed by", "Subtitles by", "Translated by",
+            "Copyright", "All rights reserved", "www.", "http",
+            # Repeated sounds
+            "la la la", "da da da", "na na na", "doo doo",
+            # Breathing/ambient
+            "breathing", "sighs", "coughs", "sniffs",
         ]
 
         # Check for exact matches (short hallucinations)
         if text_lower in [p.lower() for p in junk_patterns]:
             return True
 
-        # Check for repeated patterns
-        for pattern in junk_patterns:
-            if text.count(pattern) > 2 or text_lower.count(pattern.lower()) > 2:
+        # Check for patterns that start with common hallucinations
+        hallucination_starts = [
+            "thank you for", "thanks for", "please subscribe",
+            "don't forget", "see you", "bye bye", "goodbye",
+            "transcribed by", "subtitles by", "translated by",
+        ]
+        for start in hallucination_starts:
+            if text_lower.startswith(start):
                 return True
+
+        # Check for repeated patterns (whole words only for short patterns)
+        for pattern in junk_patterns:
+            if len(pattern) <= 3:
+                # For short patterns, use word boundary matching
+                word_count = len(re.findall(r'\b' + re.escape(pattern) + r'\b', text_lower, re.IGNORECASE))
+                if word_count > 2:
+                    return True
+            else:
+                # For longer patterns, substring matching is fine
+                if text.count(pattern) > 2 or text_lower.count(pattern.lower()) > 2:
+                    return True
 
         # Check if mostly non-alphanumeric
         alpha_count = sum(1 for c in text if c.isalpha())
         if len(text_stripped) > 5 and alpha_count < len(text_stripped) * 0.3:
             return True
 
-        # Check for excessive repetition
+        # Check for excessive repetition (same word repeated)
         words = text.split()
         if len(words) > 3:
             unique_words = set(w.lower() for w in words)
             if len(unique_words) < len(words) * 0.3:
                 return True
 
+        # Check for stuttering pattern (word repeated immediately)
+        if len(words) >= 2:
+            repeated_count = sum(1 for i in range(len(words) - 1) if words[i].lower() == words[i + 1].lower())
+            if repeated_count >= len(words) // 2:
+                return True
+
         # Single word that's just a number or very short
         if len(words) == 1 and (text_stripped.replace('.', '').replace('%', '').isdigit() or len(text_stripped) < 4):
+            return True
+
+        # Check for all-caps short text (often noise)
+        if len(text_stripped) < 10 and text_stripped.isupper() and text_stripped.isalpha():
             return True
 
         return False
@@ -518,17 +578,34 @@ class DictationProcessor:
         "talk to you later": "Talk to you later!",
     }
 
+    # Special commands that control the app (processed separately)
+    CONTROL_COMMANDS = {
+        "scratch that": "SCRATCH",
+        "delete that": "SCRATCH",
+        "undo that": "SCRATCH",
+        "never mind": "SCRATCH",
+        "cancel that": "CANCEL",
+        "repeat that": "REPEAT",
+        "say that again": "REPEAT",
+    }
+
     # Commands that should remove preceding space
     NO_SPACE_BEFORE = {".", ",", "?", "!", ":", ";", ")", "]", '"'}
 
     # Common text corrections
     TEXT_CORRECTIONS = {
+        # "I" corrections
         r'\bi\b': 'I',  # Standalone "i" -> "I"
         r'\bi\'m\b': "I'm",
         r'\bi\'ll\b': "I'll",
         r'\bi\'ve\b': "I've",
         r'\bi\'d\b': "I'd",
         r'\bim\b': "I'm",  # Common speech-to-text error
+        r'\bill\b': "I'll",  # Common speech-to-text error
+        r'\bive\b': "I've",  # Common speech-to-text error
+        # Note: "id" -> "I'd" removed as "id" is a valid word (user id, etc.)
+
+        # Contractions without apostrophes
         r'\bdont\b': "don't",
         r'\bwont\b': "won't",
         r'\bcant\b': "can't",
@@ -536,6 +613,7 @@ class DictationProcessor:
         r'\bcouldnt\b': "couldn't",
         r'\bshouldnt\b': "shouldn't",
         r'\bdidnt\b': "didn't",
+        r'\bdoesnt\b': "doesn't",
         r'\bisnt\b': "isn't",
         r'\barent\b': "aren't",
         r'\bwasnt\b': "wasn't",
@@ -543,7 +621,93 @@ class DictationProcessor:
         r'\bhasnt\b': "hasn't",
         r'\bhavent\b': "haven't",
         r'\bhadnt\b': "hadn't",
+        r'\bwontnt\b': "won't",  # Rare but happens
+        r'\bmustnt\b': "mustn't",
+        r'\bneednt\b': "needn't",
+        r'\bshant\b': "shan't",
+        r'\bmightnt\b': "mightn't",
+
+        # Common word contractions
+        r'\bthats\b': "that's",
+        r'\bwhats\b': "what's",
+        r'\bheres\b': "here's",
+        r'\btheres\b': "there's",
+        r'\bwheres\b': "where's",
+        r'\bwhos\b': "who's",
+        r'\bhows\b': "how's",
+        r'\bwhens\b': "when's",
+        r'\bwhys\b': "why's",
+        r'\bits\b': "it's",
+        r'\blets\b': "let's",
+        r'\byoure\b': "you're",
+        r'\btheyre\b': "they're",
+        r'\bwere\b(?!\s)': "we're",
+        r'\bshes\b': "she's",
+        r'\bhes\b': "he's",
+        r'\bweve\b': "we've",
+        r'\btheyve\b': "they've",
+        r'\byouve\b': "you've",
+        r'\bwhatll\b': "what'll",
+        r'\bwholl\b': "who'll",
+        r'\bthatll\b': "that'll",
+        r'\bitll\b': "it'll",
+        r'\btheyll\b': "they'll",
+        # Note: "well" -> "we'll" removed as it's too context-dependent
+        r'\byoull\b': "you'll",
+        # Note: "shell" -> "she'll" and "hell" -> "he'll" removed as too context-dependent
+
+        # Common speech-to-text phonetic errors
+        r'\bgonna\b': "going to",
+        r'\bwanna\b': "want to",
+        r'\bgotta\b': "got to",
+        r'\blemme\b': "let me",
+        r'\bgimme\b': "give me",
+        r'\bkinda\b': "kind of",
+        r'\bsorta\b': "sort of",
+        r'\blotta\b': "lot of",
+        r'\bouttta\b': "out of",
+        r'\bcuz\b': "because",
+        r'\bcause\b': "because",
+        r'\btho\b': "though",
+        r'\bthru\b': "through",
+        r'\bok\b': "okay",
+
+        # Double word fixes
+        r'\bthe the\b': "the",
+        r'\ba a\b': "a",
+        r'\ban an\b': "an",
+        r'\band and\b': "and",
+        r'\bto to\b': "to",
+        r'\bof of\b': "of",
+        r'\bis is\b': "is",
+        r'\bit it\b': "it",
+        r'\bthat that\b': "that",
     }
+
+    # Filler words to remove (like Wispr Flow's auto-edit)
+    # Note: Be conservative - only remove clear fillers, not words that might be intentional
+    FILLER_WORDS = [
+        # Basic filler sounds with surrounding punctuation (safe to remove)
+        # Pattern: ", um," or ", um " -> " "
+        r',?\s*\b(um+)\b\s*,?\s*',
+        r',?\s*\b(uh+)\b\s*,?\s*',
+        r',?\s*\b(er+)\b\s*,?\s*',
+        r',?\s*\b(hmm+)\b\s*,?\s*',
+        r',?\s*\b(hm+)\b\s*,?\s*',
+        # Repeated words (duplicate only, keep one)
+        r'\b(like)\s+(?=like\b)',
+        r'\b(so)\s+(?=so\b)',
+        r'\b(really)\s+(?=really\b)',
+        r'\b(very)\s+(?=very\b)',
+        r'\b(just)\s+(?=just\b)',
+        # Filler phrases that don't add meaning (with surrounding punctuation)
+        r',?\s*\b(you know)\b\s*,?\s*',
+        r',?\s*\b(i mean)\b\s*,?\s*',
+        # Sentence starters that are often just filler (at beginning only)
+        r'^(so)\s*,\s+',  # "So, " at start (with comma)
+        r'^(well)\s*,\s+',  # "Well, " at start (with comma)
+        r'^(okay)\s*,\s+',  # "Okay, " at start (with comma)
+    ]
 
     @classmethod
     def process(cls, text, enabled=True, auto_capitalize=True, smart_punctuation=True):
@@ -577,14 +741,39 @@ class DictationProcessor:
 
         result = result.strip()
 
-        # Apply text corrections (i -> I, etc.)
+        # Remove filler words (um, uh, like, you know, etc.)
+        # Apply multiple passes to catch nested fillers
+        # Replace with a space to prevent words from merging
+        for _ in range(2):
+            for pattern in cls.FILLER_WORDS:
+                result = re.sub(pattern, ' ', result, flags=re.IGNORECASE | re.MULTILINE)
+
+        # Apply text corrections (contractions, common errors)
         for pattern, replacement in cls.TEXT_CORRECTIONS.items():
             result = re.sub(pattern, replacement, result, flags=re.IGNORECASE)
 
+        # Clean up extra spaces and punctuation issues
+        result = re.sub(r'\s+', ' ', result).strip()  # Multiple spaces to single
+        result = re.sub(r'\s+([.,!?;:])', r'\1', result)  # Remove space before punctuation
+        result = re.sub(r',\s*,+', ',', result)  # Remove duplicate/multiple commas
+        result = re.sub(r'([.!?;:])\s*([.!?;:])', r'\1', result)  # Remove duplicate sentence-end punctuation
+        result = re.sub(r'^[.,;:]\s*', '', result)  # Remove leading punctuation (except ? !)
+        result = re.sub(r',\s*([.!?])', r'\1', result)  # Remove comma before sentence end
+
+        # Remove trailing filler that might remain
+        result = re.sub(r'\s+(um|uh|er|ah|hmm|hm|mm|eh)\s*[.,]?\s*$', '', result, flags=re.IGNORECASE)
+
         # Smart punctuation: add period at end if no sentence-ending punctuation
         if smart_punctuation and result:
+            # Don't add period if it's a question (detected by question words at start)
+            question_starters = ['what', 'where', 'when', 'why', 'who', 'how', 'which', 'whose',
+                                 'is it', 'are you', 'do you', 'does', 'did', 'can', 'could',
+                                 'would', 'should', 'will', 'have you', 'has', 'was', 'were']
+            text_lower = result.lower()
+            is_question = any(text_lower.startswith(q) for q in question_starters)
+
             if result[-1] not in '.?!':
-                result += '.'
+                result += '?' if is_question else '.'
 
         # Auto-capitalize first letter
         if auto_capitalize and result:
@@ -593,7 +782,23 @@ class DictationProcessor:
             # Capitalize after sentence endings (. ! ?)
             result = re.sub(r'([.!?])\s+([a-z])', lambda m: m.group(1) + ' ' + m.group(2).upper(), result)
 
+            # Capitalize "I" in contractions that may have been lowercased
+            result = re.sub(r"\bi'm\b", "I'm", result)
+            result = re.sub(r"\bi'll\b", "I'll", result)
+            result = re.sub(r"\bi've\b", "I've", result)
+            result = re.sub(r"\bi'd\b", "I'd", result)
+            result = re.sub(r'\bi\b', 'I', result)
+
         return result
+
+    @classmethod
+    def check_control_command(cls, text):
+        """Check if text is a control command. Returns command or None."""
+        text_lower = text.lower().strip()
+        for phrase, command in cls.CONTROL_COMMANDS.items():
+            if text_lower == phrase or text_lower.startswith(phrase):
+                return command
+        return None
 
 # ============================================================================
 # OUTPUT HANDLER
@@ -1499,19 +1704,46 @@ class VoiceToClaudeApp(rumps.App):
                     pass
 
                 if text and self.running and not self.paused:
+                    # Check for control commands first
+                    control_cmd = DictationProcessor.check_control_command(text)
+
+                    if control_cmd == "SCRATCH":
+                        # Delete the last transcription by simulating Cmd+Z
+                        if CONFIG.get("sound_effects"):
+                            self.output_handler.play_sound("Basso")
+                        script = 'tell application "System Events" to keystroke "z" using command down'
+                        subprocess.run(['osascript', '-e', script], capture_output=True, timeout=2)
+                        continue
+
+                    elif control_cmd == "CANCEL":
+                        # Just cancel, don't output anything
+                        if CONFIG.get("sound_effects"):
+                            self.output_handler.play_sound("Basso")
+                        continue
+
+                    elif control_cmd == "REPEAT":
+                        # Repeat the last transcription
+                        if self.last_processed_text:
+                            processed_text = self.last_processed_text
+                        else:
+                            continue
+                    else:
+                        # Normal processing
+                        self.set_state(State.SENDING)
+
+                        # Save original for undo
+                        self.last_original_text = text
+
+                        # Process dictation commands, capitalize, and punctuate
+                        processed_text = DictationProcessor.process(
+                            text,
+                            enabled=CONFIG.get("dictation_commands", True),
+                            auto_capitalize=CONFIG.get("auto_capitalize", True),
+                            smart_punctuation=CONFIG.get("smart_punctuation", True)
+                        )
+                        self.last_processed_text = processed_text
+
                     self.set_state(State.SENDING)
-
-                    # Save original for undo
-                    self.last_original_text = text
-
-                    # Process dictation commands, capitalize, and punctuate
-                    processed_text = DictationProcessor.process(
-                        text,
-                        enabled=CONFIG.get("dictation_commands", True),
-                        auto_capitalize=CONFIG.get("auto_capitalize", True),
-                        smart_punctuation=CONFIG.get("smart_punctuation", True)
-                    )
-                    self.last_processed_text = processed_text
 
                     # Update stats and history
                     self.update_stats(processed_text)

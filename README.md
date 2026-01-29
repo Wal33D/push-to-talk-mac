@@ -266,6 +266,26 @@ MIT License - See [LICENSE](LICENSE) for details.
 
 ## Changelog
 
+### v1.8.1
+- Improved hallucination filtering (fixed false positives for valid sentences)
+- Enhanced filler word removal (um, uh, you know, I mean)
+- Better handling of orphaned commas after filler removal
+- Fixed word boundary matching for short patterns
+- Added more text corrections for common contractions
+- Smart question detection (auto-adds ? for questions)
+
+### v1.8.0
+- Added comprehensive filler word removal (like Wispr Flow)
+- Added more text corrections for contractions
+- Added double word removal (the the -> the)
+- Added more hallucination patterns (timestamps, music symbols)
+- Improved sentence capitalization
+
+### v1.7.0
+- Added 5 Whisper model options (tiny, base, small, medium, large-v3)
+- Improved model selection menu
+- Better error handling
+
 ### v1.6.1
 - Added recording sound option (beep when recording starts)
 - Better callback system for audio events
