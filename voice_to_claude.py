@@ -35,7 +35,7 @@ import pyaudio
 import pyperclip
 import rumps
 
-__version__ = "1.3.1"
+__version__ = "1.3.2"
 __author__ = "Waleed Judah"
 
 # ============================================================================
@@ -69,6 +69,10 @@ DEFAULT_CONFIG = {
     # Stats
     "total_transcriptions": 0,
     "total_words": 0,
+
+    # Advanced
+    "send_key": "return",  # Options: return, ctrl_return, cmd_return
+    "custom_replacements": {},  # User-defined text replacements
 }
 
 def load_config():
@@ -462,13 +466,16 @@ class DictationProcessor:
         # Sort commands by length (longest first) to avoid partial matches
         sorted_commands = sorted(cls.COMMANDS.keys(), key=len, reverse=True)
 
+        import re
         for command in sorted_commands:
             replacement = cls.COMMANDS[command]
 
             # Case-insensitive replacement
-            import re
+            # Use re.escape on replacement to handle special chars like backslash
             pattern = re.compile(re.escape(command), re.IGNORECASE)
-            result = pattern.sub(replacement, result)
+            # For sub(), backslash needs to be escaped in replacement string
+            safe_replacement = replacement.replace('\\', '\\\\')
+            result = pattern.sub(safe_replacement, result)
 
         # Clean up spacing around punctuation
         for punct in cls.NO_SPACE_BEFORE:
@@ -488,15 +495,25 @@ class OutputHandler:
     """Handles pasting text to the active window."""
 
     @staticmethod
-    def paste_and_send(text):
-        """Copy text to clipboard and simulate Cmd+V, Enter."""
+    def paste_and_send(text, send_key="return"):
+        """Copy text to clipboard and simulate Cmd+V, then send key."""
         pyperclip.copy(text)
 
-        script = '''
+        # Build the send key command
+        if send_key == "ctrl_return":
+            send_cmd = 'keystroke return using control down'
+        elif send_key == "cmd_return":
+            send_cmd = 'keystroke return using command down'
+        elif send_key == "shift_return":
+            send_cmd = 'keystroke return using shift down'
+        else:
+            send_cmd = 'keystroke return'
+
+        script = f'''
         tell application "System Events"
             keystroke "v" using command down
             delay 0.1
-            keystroke return
+            {send_cmd}
         end tell
         '''
         try:
@@ -548,15 +565,25 @@ class OutputHandler:
             return False
 
     @staticmethod
-    def type_and_send(text):
-        """Type text and press Enter."""
+    def type_and_send(text, send_key="return"):
+        """Type text and press send key."""
         escaped = text.replace('\\', '\\\\').replace('"', '\\"')
+
+        # Build the send key command
+        if send_key == "ctrl_return":
+            send_cmd = 'keystroke return using control down'
+        elif send_key == "cmd_return":
+            send_cmd = 'keystroke return using command down'
+        elif send_key == "shift_return":
+            send_cmd = 'keystroke return using shift down'
+        else:
+            send_cmd = 'keystroke return'
 
         script = f'''
         tell application "System Events"
             keystroke "{escaped}"
             delay 0.1
-            keystroke return
+            {send_cmd}
         end tell
         '''
         try:
@@ -660,6 +687,22 @@ class VoiceToClaudeApp(rumps.App):
                 item.state = 1
             self.output_menu.add(item)
 
+        # Send key submenu
+        self.send_key_menu = rumps.MenuItem("Send Key")
+        send_keys = {
+            "Enter": "return",
+            "Ctrl+Enter": "ctrl_return",
+            "Cmd+Enter": "cmd_return",
+            "Shift+Enter": "shift_return",
+        }
+        current_send_key = CONFIG.get("send_key", "return")
+        for name, key in send_keys.items():
+            item = rumps.MenuItem(name, callback=self.set_send_key)
+            item.key_value = key
+            if key == current_send_key:
+                item.state = 1
+            self.send_key_menu.add(item)
+
         # Model submenu
         self.model_menu = rumps.MenuItem("Whisper Model")
         models = {"Base (fast)": "base", "Small (accurate)": "small"}
@@ -719,6 +762,7 @@ class VoiceToClaudeApp(rumps.App):
             None,
             self.sensitivity_menu,
             self.output_menu,
+            self.send_key_menu,
             self.model_menu,
             self.language_menu,
             self.device_menu,
@@ -782,6 +826,16 @@ class VoiceToClaudeApp(rumps.App):
 
         for item in self.output_menu.values():
             item.state = 1 if item.title == sender.title else 0
+
+    def set_send_key(self, sender):
+        """Change the send key."""
+        key_value = getattr(sender, 'key_value', 'return')
+        CONFIG["send_key"] = key_value
+        save_config(CONFIG)
+
+        for item in self.send_key_menu.values():
+            expected_key = getattr(item, 'key_value', None)
+            item.state = 1 if expected_key == key_value else 0
 
     def set_model(self, sender):
         """Change Whisper model (requires restart)."""
@@ -1203,12 +1257,13 @@ class VoiceToClaudeApp(rumps.App):
 
                     # Output based on mode
                     output_mode = CONFIG.get("output_mode", "paste_send")
+                    send_key = CONFIG.get("send_key", "return")
                     if output_mode == "paste_send":
-                        self.output_handler.paste_and_send(processed_text)
+                        self.output_handler.paste_and_send(processed_text, send_key)
                     elif output_mode == "paste_only":
                         self.output_handler.paste_only(processed_text)
                     elif output_mode == "type_send":
-                        self.output_handler.type_and_send(processed_text)
+                        self.output_handler.type_and_send(processed_text, send_key)
                     elif output_mode == "type_only":
                         self.output_handler.type_text(processed_text)
                     else:

@@ -102,6 +102,11 @@ Click the menu bar icon to access:
   - Type + Send - Type text and press Enter (for apps that block paste)
   - Type Only - Type text character by character
   - Copy Only - Just copy to clipboard
+- **Send Key** - Choose which key to send after text
+  - Enter (default)
+  - Ctrl+Enter (for Discord, Slack threads, etc.)
+  - Cmd+Enter
+  - Shift+Enter
 - **Whisper Model**
   - Base (fast) - Quicker, less accurate
   - Small (accurate) - Slower, more accurate
@@ -253,6 +258,11 @@ Contributions welcome! Please open an issue or PR.
 MIT License - See [LICENSE](LICENSE) for details.
 
 ## Changelog
+
+### v1.3.2
+- Added customizable send key (Enter, Ctrl+Enter, Cmd+Enter, Shift+Enter)
+- Added microphone test with live audio level visualization
+- Added quick help dialog
 
 ### v1.3.0
 - Added dictation commands (period, comma, new line, etc.)
