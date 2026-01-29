@@ -19,12 +19,15 @@ Perfect for dictating to Claude Code, ChatGPT, or any text input without touchin
   - Paste Only (just Cmd+V)
   - Copy Only (clipboard only)
 - **Adjustable Sensitivity** - Low/Medium/High presets for different noise levels
+- **Microphone Calibration** - Measure ambient noise and auto-set threshold
+- **Input Device Selection** - Choose which microphone to use
 - **Hallucination Filtering** - Filters out Whisper junk from background noise
 - **Persistent Settings** - Config saved between sessions
 - **Sound Effects** - Audio feedback for state changes
 - **Transcription History** - View and copy recent transcriptions
-- **Session Statistics** - Track words and transcriptions
+- **Session & Lifetime Statistics** - Track words and transcriptions
 - **Launch at Login** - Optional auto-start
+- **Smart Timeouts** - Auto-reset after 30s idle, max 2min recording
 
 ## Requirements
 
@@ -197,6 +200,13 @@ Contributions welcome! Please open an issue or PR.
 MIT License - See [LICENSE](LICENSE) for details.
 
 ## Changelog
+
+### v1.2.0
+- Added microphone calibration tool
+- Added input device selection
+- Added recording timeouts (30s listen, 2min max record)
+- Added About dialog with lifetime stats
+- Added CONTRIBUTING.md
 
 ### v1.1.0
 - Added persistent configuration
