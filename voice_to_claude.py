@@ -35,7 +35,7 @@ import pyaudio
 import pyperclip
 import rumps
 
-__version__ = "1.3.2"
+__version__ = "1.3.3"
 __author__ = "Waleed Judah"
 
 # ============================================================================
@@ -72,6 +72,7 @@ DEFAULT_CONFIG = {
 
     # Advanced
     "send_key": "return",  # Options: return, ctrl_return, cmd_return
+    "ready_sound": False,  # Play sound when ready to listen again
     "custom_replacements": {},  # User-defined text replacements
 }
 
@@ -734,6 +735,10 @@ class VoiceToClaudeApp(rumps.App):
         self.notif_item = rumps.MenuItem("Notifications", callback=self.toggle_notifications)
         self.notif_item.state = 1 if CONFIG.get("show_notifications", True) else 0
 
+        # Ready sound toggle
+        self.ready_sound_item = rumps.MenuItem("Ready Sound", callback=self.toggle_ready_sound)
+        self.ready_sound_item.state = 1 if CONFIG.get("ready_sound", False) else 0
+
         # Input device submenu
         self.device_menu = rumps.MenuItem("Input Device")
         self._populate_device_menu()
@@ -770,6 +775,7 @@ class VoiceToClaudeApp(rumps.App):
             self.sound_item,
             self.dictation_item,
             self.notif_item,
+            self.ready_sound_item,
             None,
             self.calibrate_item,
             self.test_mic_item,
@@ -871,6 +877,12 @@ class VoiceToClaudeApp(rumps.App):
         """Toggle macOS notifications."""
         CONFIG["show_notifications"] = not CONFIG.get("show_notifications", True)
         sender.state = 1 if CONFIG["show_notifications"] else 0
+        save_config(CONFIG)
+
+    def toggle_ready_sound(self, sender):
+        """Toggle ready sound (beep when ready to listen again)."""
+        CONFIG["ready_sound"] = not CONFIG.get("ready_sound", False)
+        sender.state = 1 if CONFIG["ready_sound"] else 0
         save_config(CONFIG)
 
     def set_language(self, sender):
@@ -1284,6 +1296,9 @@ class VoiceToClaudeApp(rumps.App):
 
             if self.running and not self.paused:
                 self.set_state(State.READY)
+                # Play ready sound if enabled
+                if CONFIG.get("ready_sound"):
+                    self.output_handler.play_sound("Pop")
                 time.sleep(0.2)
 
 # ============================================================================
