@@ -1,0 +1,4 @@
+pyaudio>=0.2.14
+pyperclip>=1.8.0
+rumps>=0.4.0
+lightning-whisper-mlx>=0.0.10
