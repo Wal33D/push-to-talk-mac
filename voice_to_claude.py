@@ -36,7 +36,7 @@ import pyaudio
 import pyperclip
 import rumps
 
-__version__ = "1.7.0"
+__version__ = "1.8.0"
 __author__ = "Waleed Judah"
 
 # ============================================================================
@@ -77,6 +77,7 @@ DEFAULT_CONFIG = {
     "send_key": "return",  # Options: return, ctrl_return, cmd_return
     "ready_sound": False,  # Play sound when ready to listen again
     "recording_sound": False,  # Play sound when recording starts
+    "append_mode": False,  # Append to clipboard instead of replacing
     "custom_replacements": {},  # User-defined text replacements
 }
 
@@ -501,6 +502,20 @@ class DictationProcessor:
         "link end": "]",
         "bullet point": "- ",
         "numbered": "1. ",
+
+        # Quick phrases (common responses)
+        "sounds good": "Sounds good!",
+        "thank you": "Thank you!",
+        "no problem": "No problem!",
+        "on my way": "On my way!",
+        "be right back": "Be right back.",
+        "one moment": "One moment please.",
+        "let me check": "Let me check on that.",
+        "good morning": "Good morning!",
+        "good afternoon": "Good afternoon!",
+        "good evening": "Good evening!",
+        "have a good day": "Have a good day!",
+        "talk to you later": "Talk to you later!",
     }
 
     # Commands that should remove preceding space
@@ -588,8 +603,21 @@ class OutputHandler:
     """Handles pasting text to the active window."""
 
     @staticmethod
-    def paste_and_send(text, send_key="return"):
+    def prepare_text(text, append=False):
+        """Prepare text for output, optionally appending to clipboard."""
+        if append:
+            try:
+                current = pyperclip.paste()
+                if current:
+                    text = current + " " + text
+            except:
+                pass
+        return text
+
+    @staticmethod
+    def paste_and_send(text, send_key="return", append=False):
         """Copy text to clipboard and simulate Cmd+V, then send key."""
+        text = OutputHandler.prepare_text(text, append)
         pyperclip.copy(text)
 
         # Build the send key command
@@ -617,8 +645,9 @@ class OutputHandler:
             return False
 
     @staticmethod
-    def paste_only(text):
+    def paste_only(text, append=False):
         """Copy text to clipboard and simulate Cmd+V (no Enter)."""
+        text = OutputHandler.prepare_text(text, append)
         pyperclip.copy(text)
 
         script = '''
@@ -879,6 +908,10 @@ class VoiceToClaudeApp(rumps.App):
         self.recording_sound_item = rumps.MenuItem("Recording Sound", callback=self.toggle_recording_sound)
         self.recording_sound_item.state = 1 if CONFIG.get("recording_sound", False) else 0
 
+        # Append mode toggle
+        self.append_mode_item = rumps.MenuItem("Append Mode", callback=self.toggle_append_mode)
+        self.append_mode_item.state = 1 if CONFIG.get("append_mode", False) else 0
+
         # Input device submenu
         self.device_menu = rumps.MenuItem("Input Device")
         self._populate_device_menu()
@@ -923,6 +956,7 @@ class VoiceToClaudeApp(rumps.App):
             self.notif_item,
             self.ready_sound_item,
             self.recording_sound_item,
+            self.append_mode_item,
             None,
             self.calibrate_item,
             self.test_mic_item,
@@ -1075,6 +1109,12 @@ class VoiceToClaudeApp(rumps.App):
         """Toggle recording sound (beep when recording starts)."""
         CONFIG["recording_sound"] = not CONFIG.get("recording_sound", False)
         sender.state = 1 if CONFIG["recording_sound"] else 0
+        save_config(CONFIG)
+
+    def toggle_append_mode(self, sender):
+        """Toggle append mode (append to clipboard instead of replacing)."""
+        CONFIG["append_mode"] = not CONFIG.get("append_mode", False)
+        sender.state = 1 if CONFIG["append_mode"] else 0
         save_config(CONFIG)
 
     def set_language(self, sender):
@@ -1480,10 +1520,12 @@ class VoiceToClaudeApp(rumps.App):
                     # Output based on mode
                     output_mode = CONFIG.get("output_mode", "paste_send")
                     send_key = CONFIG.get("send_key", "return")
+                    append_mode = CONFIG.get("append_mode", False)
+
                     if output_mode == "paste_send":
-                        self.output_handler.paste_and_send(processed_text, send_key)
+                        self.output_handler.paste_and_send(processed_text, send_key, append_mode)
                     elif output_mode == "paste_only":
-                        self.output_handler.paste_only(processed_text)
+                        self.output_handler.paste_only(processed_text, append_mode)
                     elif output_mode == "type_send":
                         self.output_handler.type_and_send(processed_text, send_key)
                     elif output_mode == "type_only":
