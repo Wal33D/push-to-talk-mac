@@ -36,7 +36,7 @@ import pyaudio
 import pyperclip
 import rumps
 
-__version__ = "1.5.0"
+__version__ = "1.6.0"
 __author__ = "Waleed Judah"
 
 # ============================================================================
@@ -67,6 +67,7 @@ DEFAULT_CONFIG = {
     "show_notifications": True,
     "dictation_commands": True,
     "auto_capitalize": True,  # Capitalize first letter of transcriptions
+    "smart_punctuation": True,  # Auto-add period, capitalize after sentences
 
     # Stats
     "total_transcriptions": 0,
@@ -486,10 +487,19 @@ class DictationProcessor:
     # Commands that should remove preceding space
     NO_SPACE_BEFORE = {".", ",", "?", "!", ":", ";", ")", "]", '"'}
 
+    # Common text corrections
+    TEXT_CORRECTIONS = {
+        r'\bi\b': 'I',  # Standalone "i" -> "I"
+        r'\bi\'m\b': "I'm",
+        r'\bi\'ll\b': "I'll",
+        r'\bi\'ve\b': "I've",
+        r'\bi\'d\b': "I'd",
+    }
+
     @classmethod
-    def process(cls, text, enabled=True, auto_capitalize=True):
+    def process(cls, text, enabled=True, auto_capitalize=True, smart_punctuation=True):
         """Process text and replace dictation commands."""
-        if not enabled and not auto_capitalize:
+        if not enabled and not auto_capitalize and not smart_punctuation:
             return text
 
         result = text
@@ -518,9 +528,21 @@ class DictationProcessor:
 
         result = result.strip()
 
+        # Apply text corrections (i -> I, etc.)
+        for pattern, replacement in cls.TEXT_CORRECTIONS.items():
+            result = re.sub(pattern, replacement, result, flags=re.IGNORECASE)
+
+        # Smart punctuation: add period at end if no sentence-ending punctuation
+        if smart_punctuation and result:
+            if result[-1] not in '.?!':
+                result += '.'
+
         # Auto-capitalize first letter
         if auto_capitalize and result:
             result = result[0].upper() + result[1:]
+
+            # Capitalize after sentence endings (. ! ?)
+            result = re.sub(r'([.!?])\s+([a-z])', lambda m: m.group(1) + ' ' + m.group(2).upper(), result)
 
         return result
 
@@ -679,6 +701,8 @@ class VoiceToClaudeApp(rumps.App):
         self.session_transcriptions = 0
         self.session_words = 0
         self.recent_transcriptions = []
+        self.last_original_text = None  # For undo feature
+        self.last_processed_text = None
 
         # Initialize components
         self.audio_engine = AudioEngine(CONFIG, self.set_state)
@@ -799,6 +823,10 @@ class VoiceToClaudeApp(rumps.App):
         self.capitalize_item = rumps.MenuItem("Auto-Capitalize", callback=self.toggle_capitalize)
         self.capitalize_item.state = 1 if CONFIG.get("auto_capitalize", True) else 0
 
+        # Smart punctuation toggle
+        self.smart_punct_item = rumps.MenuItem("Smart Punctuation", callback=self.toggle_smart_punctuation)
+        self.smart_punct_item.state = 1 if CONFIG.get("smart_punctuation", True) else 0
+
         # Notifications toggle
         self.notif_item = rumps.MenuItem("Notifications", callback=self.toggle_notifications)
         self.notif_item.state = 1 if CONFIG.get("show_notifications", True) else 0
@@ -810,6 +838,9 @@ class VoiceToClaudeApp(rumps.App):
         # Input device submenu
         self.device_menu = rumps.MenuItem("Input Device")
         self._populate_device_menu()
+
+        # Undo last transcription
+        self.undo_item = rumps.MenuItem("Undo Last", callback=self.undo_last)
 
         # Recent transcriptions submenu
         self.recent_menu = rumps.MenuItem("Recent Transcriptions")
@@ -844,11 +875,13 @@ class VoiceToClaudeApp(rumps.App):
             self.sound_item,
             self.dictation_item,
             self.capitalize_item,
+            self.smart_punct_item,
             self.notif_item,
             self.ready_sound_item,
             None,
             self.calibrate_item,
             self.test_mic_item,
+            self.undo_item,
             self.recent_menu,
             self.stats_item,
             self.status_item,
@@ -958,6 +991,12 @@ class VoiceToClaudeApp(rumps.App):
         """Toggle auto-capitalize first letter."""
         CONFIG["auto_capitalize"] = not CONFIG.get("auto_capitalize", True)
         sender.state = 1 if CONFIG["auto_capitalize"] else 0
+        save_config(CONFIG)
+
+    def toggle_smart_punctuation(self, sender):
+        """Toggle smart punctuation (auto-period, sentence capitalization)."""
+        CONFIG["smart_punctuation"] = not CONFIG.get("smart_punctuation", True)
+        sender.state = 1 if CONFIG["smart_punctuation"] else 0
         save_config(CONFIG)
 
     def toggle_notifications(self, sender):
@@ -1288,6 +1327,18 @@ class VoiceToClaudeApp(rumps.App):
             self.recent_transcriptions = []
             self._rebuild_recent_menu()
 
+    def undo_last(self, sender):
+        """Copy the original (unprocessed) last transcription to clipboard."""
+        if self.last_original_text:
+            pyperclip.copy(self.last_original_text)
+            rumps.notification(
+                title="Voice to Claude",
+                subtitle="Undo",
+                message=f"Original text copied: {self.last_original_text[:30]}..."
+            )
+        else:
+            rumps.alert(title="Undo", message="No transcription to undo.", ok="OK")
+
     def update_stats(self, text):
         """Update session statistics."""
         word_count = len(text.split())
@@ -1344,12 +1395,17 @@ class VoiceToClaudeApp(rumps.App):
                 if text and self.running and not self.paused:
                     self.set_state(State.SENDING)
 
-                    # Process dictation commands and capitalize
+                    # Save original for undo
+                    self.last_original_text = text
+
+                    # Process dictation commands, capitalize, and punctuate
                     processed_text = DictationProcessor.process(
                         text,
                         enabled=CONFIG.get("dictation_commands", True),
-                        auto_capitalize=CONFIG.get("auto_capitalize", True)
+                        auto_capitalize=CONFIG.get("auto_capitalize", True),
+                        smart_punctuation=CONFIG.get("smart_punctuation", True)
                     )
+                    self.last_processed_text = processed_text
 
                     # Update stats and history
                     self.update_stats(processed_text)
