@@ -144,6 +144,28 @@ class AudioEngine:
         self.state_callback = state_callback
         self.running = False
         self.paused = False
+        self.device_index = config.get("input_device", None)
+
+    @staticmethod
+    def list_input_devices():
+        """List available audio input devices."""
+        p = pyaudio.PyAudio()
+        devices = []
+        for i in range(p.get_device_count()):
+            info = p.get_device_info_by_index(i)
+            if info['maxInputChannels'] > 0:
+                devices.append({
+                    'index': i,
+                    'name': info['name'],
+                    'channels': info['maxInputChannels'],
+                })
+        p.terminate()
+        return devices
+
+    def set_device(self, device_index):
+        """Set the input device to use."""
+        self.device_index = device_index
+        self.config["input_device"] = device_index
 
     def get_audio_level(self, data):
         """Calculate the peak audio level from raw bytes."""
@@ -155,13 +177,17 @@ class AudioEngine:
         p = pyaudio.PyAudio()
 
         try:
-            stream = p.open(
-                format=pyaudio.paInt16,
-                channels=self.config["channels"],
-                rate=self.config["rate"],
-                input=True,
-                frames_per_buffer=self.config["chunk"]
-            )
+            stream_kwargs = {
+                'format': pyaudio.paInt16,
+                'channels': self.config["channels"],
+                'rate': self.config["rate"],
+                'input': True,
+                'frames_per_buffer': self.config["chunk"],
+            }
+            if self.device_index is not None:
+                stream_kwargs['input_device_index'] = self.device_index
+
+            stream = p.open(**stream_kwargs)
         except Exception as e:
             print(f"Failed to open audio stream: {e}")
             self.state_callback(State.ERROR)
@@ -440,6 +466,10 @@ class VoiceToClaudeApp(rumps.App):
         self.sound_item = rumps.MenuItem("Sound Effects", callback=self.toggle_sound)
         self.sound_item.state = 1 if CONFIG.get("sound_effects", True) else 0
 
+        # Input device submenu
+        self.device_menu = rumps.MenuItem("Input Device")
+        self._populate_device_menu()
+
         # Recent transcriptions submenu
         self.recent_menu = rumps.MenuItem("Recent Transcriptions")
         self.recent_menu.add(rumps.MenuItem("(none yet)"))
@@ -450,6 +480,7 @@ class VoiceToClaudeApp(rumps.App):
             self.sensitivity_menu,
             self.output_menu,
             self.model_menu,
+            self.device_menu,
             self.sound_item,
             None,
             self.recent_menu,
@@ -526,6 +557,43 @@ class VoiceToClaudeApp(rumps.App):
         CONFIG["sound_effects"] = not CONFIG.get("sound_effects", True)
         sender.state = 1 if CONFIG["sound_effects"] else 0
         save_config(CONFIG)
+
+    def _populate_device_menu(self):
+        """Populate the input device menu."""
+        self.device_menu.clear()
+
+        # Default device option
+        default_item = rumps.MenuItem("System Default", callback=self.set_device)
+        default_item.state = 1 if CONFIG.get("input_device") is None else 0
+        self.device_menu.add(default_item)
+        self.device_menu.add(None)  # Separator
+
+        # List all input devices
+        try:
+            devices = AudioEngine.list_input_devices()
+            for device in devices:
+                name = device['name'][:40]  # Truncate long names
+                item = rumps.MenuItem(name, callback=self.set_device)
+                item.device_index = device['index']
+                if CONFIG.get("input_device") == device['index']:
+                    item.state = 1
+                self.device_menu.add(item)
+        except Exception as e:
+            print(f"Failed to list devices: {e}")
+
+    def set_device(self, sender):
+        """Set the input device."""
+        device_index = getattr(sender, 'device_index', None)
+        CONFIG["input_device"] = device_index
+        self.audio_engine.set_device(device_index)
+        save_config(CONFIG)
+
+        # Update checkmarks
+        for item in self.device_menu.values():
+            if item is None:
+                continue
+            expected_index = getattr(item, 'device_index', None)
+            item.state = 1 if expected_index == device_index else 0
 
     def add_recent_transcription(self, text):
         """Add a transcription to the recent list."""
