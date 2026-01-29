@@ -18,12 +18,15 @@ Requirements:
 
 import os
 import sys
+import json
 import threading
 import tempfile
 import wave
 import time
 import subprocess
 import array
+from pathlib import Path
+from datetime import datetime
 
 # Set working directory for model cache
 os.chdir(os.path.expanduser("~"))
@@ -32,14 +35,17 @@ import pyaudio
 import pyperclip
 import rumps
 
-__version__ = "1.0.0"
+__version__ = "1.1.0"
 __author__ = "Waleed Judah"
 
 # ============================================================================
 # CONFIGURATION
 # ============================================================================
 
-CONFIG = {
+CONFIG_DIR = Path.home() / ".config" / "voice-to-claude"
+CONFIG_FILE = CONFIG_DIR / "config.json"
+
+DEFAULT_CONFIG = {
     # Model - "base" for speed, "small" for accuracy
     "model": "base",
 
@@ -50,13 +56,45 @@ CONFIG = {
 
     # Voice detection
     "silence_threshold": 800,
-    "speech_threshold": 1500,  # Tuned for typical room noise
-    "silence_duration": 1.0,   # Seconds of silence before stopping
+    "speech_threshold": 1500,
+    "silence_duration": 1.0,
     "min_speech_duration": 0.3,
 
     # Behavior
-    "auto_send": True,  # Paste + Enter (False = just paste)
+    "auto_send": True,
+    "sound_effects": True,
+    "show_notifications": False,
+
+    # Stats
+    "total_transcriptions": 0,
+    "total_words": 0,
 }
+
+def load_config():
+    """Load config from file or create default."""
+    try:
+        CONFIG_DIR.mkdir(parents=True, exist_ok=True)
+        if CONFIG_FILE.exists():
+            with open(CONFIG_FILE) as f:
+                saved = json.load(f)
+                # Merge with defaults (in case new options added)
+                config = DEFAULT_CONFIG.copy()
+                config.update(saved)
+                return config
+    except Exception:
+        pass
+    return DEFAULT_CONFIG.copy()
+
+def save_config(config):
+    """Save config to file."""
+    try:
+        CONFIG_DIR.mkdir(parents=True, exist_ok=True)
+        with open(CONFIG_FILE, 'w') as f:
+            json.dump(config, f, indent=2)
+    except Exception:
+        pass
+
+CONFIG = load_config()
 
 # ============================================================================
 # STATES
@@ -81,6 +119,17 @@ STATE_ICONS = {
     State.SENDING:    "📤",
     State.PAUSED:     "⏸",
     State.ERROR:      "❌",
+}
+
+STATE_DESCRIPTIONS = {
+    State.LOADING:    "Loading Whisper model...",
+    State.READY:      "Ready - speak to dictate",
+    State.LISTENING:  "Listening for speech...",
+    State.SPEAKING:   "Recording your speech...",
+    State.PROCESSING: "Transcribing audio...",
+    State.SENDING:    "Pasting to active window...",
+    State.PAUSED:     "Paused - click to resume",
+    State.ERROR:      "Error - check console",
 }
 
 # ============================================================================
@@ -113,7 +162,8 @@ class AudioEngine:
                 input=True,
                 frames_per_buffer=self.config["chunk"]
             )
-        except Exception:
+        except Exception as e:
+            print(f"Failed to open audio stream: {e}")
             self.state_callback(State.ERROR)
             return None
 
@@ -156,7 +206,8 @@ class AudioEngine:
                         if silent_chunks >= chunks_for_silence:
                             break
 
-        except Exception:
+        except Exception as e:
+            print(f"Recording error: {e}")
             self.state_callback(State.ERROR)
             return None
         finally:
@@ -172,12 +223,13 @@ class AudioEngine:
             with tempfile.NamedTemporaryFile(suffix='.wav', delete=False) as f:
                 wf = wave.open(f.name, 'wb')
                 wf.setnchannels(self.config["channels"])
-                wf.setsampwidth(2)  # 16-bit
+                wf.setsampwidth(2)
                 wf.setframerate(self.config["rate"])
                 wf.writeframes(b''.join(frames))
                 wf.close()
                 return f.name
-        except Exception:
+        except Exception as e:
+            print(f"Failed to save audio: {e}")
             return None
 
 # ============================================================================
@@ -223,22 +275,27 @@ class TranscriptionEngine:
     def _is_hallucination(self, text):
         """Filter out Whisper hallucinations (junk output on noise)."""
         junk_patterns = [
-            "1.1", "...", "♪", "***", "---",
+            "1.1", "...", "♪", "***", "---", "___",
             "Thank you", "Thanks for watching",
             "Subscribe", "Bye", "See you",
+            "Please subscribe", "Like and subscribe",
+            "Thank you for watching", "Thanks for listening",
         ]
 
+        text_lower = text.lower()
         for pattern in junk_patterns:
-            if text.count(pattern) > 2:
+            if text.count(pattern) > 2 or text_lower.count(pattern.lower()) > 2:
                 return True
 
+        # Check if mostly non-alphanumeric
         alpha_count = sum(1 for c in text if c.isalnum() or c.isspace())
         if len(text) > 5 and alpha_count < len(text) * 0.5:
             return True
 
+        # Check for excessive repetition
         words = text.split()
         if len(words) > 3:
-            unique_words = set(words)
+            unique_words = set(w.lower() for w in words)
             if len(unique_words) < len(words) * 0.3:
                 return True
 
@@ -287,6 +344,21 @@ class OutputHandler:
         except Exception:
             return False
 
+    @staticmethod
+    def copy_only(text):
+        """Just copy text to clipboard."""
+        pyperclip.copy(text)
+        return True
+
+    @staticmethod
+    def play_sound(sound_name):
+        """Play a system sound."""
+        try:
+            subprocess.run(['afplay', f'/System/Library/Sounds/{sound_name}.aiff'],
+                         capture_output=True, timeout=2)
+        except Exception:
+            pass
+
 # ============================================================================
 # MENU BAR APPLICATION
 # ============================================================================
@@ -304,6 +376,9 @@ class VoiceToClaudeApp(rumps.App):
         self.state = State.LOADING
         self.running = True
         self.paused = False
+        self.session_transcriptions = 0
+        self.session_words = 0
+        self.recent_transcriptions = []
 
         # Initialize components
         self.audio_engine = AudioEngine(CONFIG, self.set_state)
@@ -317,9 +392,25 @@ class VoiceToClaudeApp(rumps.App):
             "High (quiet room)": 800,
         }
 
-        # Build menu
-        self.status_item = rumps.MenuItem("Status: Loading...")
+        # Output modes
+        self.output_modes = {
+            "Paste + Send": "paste_send",
+            "Paste Only": "paste_only",
+            "Copy Only": "copy_only",
+        }
 
+        # Build menu
+        self._build_menu()
+
+        # Start background threads
+        self.start_background_threads()
+
+    def _build_menu(self):
+        """Build the menu bar menu."""
+        self.status_item = rumps.MenuItem("Status: Loading...")
+        self.stats_item = rumps.MenuItem("Session: 0 transcriptions, 0 words")
+
+        # Sensitivity submenu
         self.sensitivity_menu = rumps.MenuItem("Sensitivity")
         for name, value in self.sensitivity_levels.items():
             item = rumps.MenuItem(name, callback=self.set_sensitivity)
@@ -327,29 +418,51 @@ class VoiceToClaudeApp(rumps.App):
                 item.state = 1
             self.sensitivity_menu.add(item)
 
-        self.auto_send_item = rumps.MenuItem(
-            "Auto-Send (Enter after paste)",
-            callback=self.toggle_auto_send
-        )
-        self.auto_send_item.state = 1 if CONFIG["auto_send"] else 0
+        # Output mode submenu
+        self.output_menu = rumps.MenuItem("Output Mode")
+        current_mode = "paste_send" if CONFIG["auto_send"] else "paste_only"
+        for name, mode in self.output_modes.items():
+            item = rumps.MenuItem(name, callback=self.set_output_mode)
+            if mode == current_mode:
+                item.state = 1
+            self.output_menu.add(item)
+
+        # Model submenu
+        self.model_menu = rumps.MenuItem("Whisper Model")
+        models = {"Base (fast)": "base", "Small (accurate)": "small"}
+        for name, model in models.items():
+            item = rumps.MenuItem(name, callback=self.set_model)
+            if model == CONFIG["model"]:
+                item.state = 1
+            self.model_menu.add(item)
+
+        # Sound effects toggle
+        self.sound_item = rumps.MenuItem("Sound Effects", callback=self.toggle_sound)
+        self.sound_item.state = 1 if CONFIG.get("sound_effects", True) else 0
+
+        # Recent transcriptions submenu
+        self.recent_menu = rumps.MenuItem("Recent Transcriptions")
+        self.recent_menu.add(rumps.MenuItem("(none yet)"))
 
         self.menu = [
             rumps.MenuItem("Pause", callback=self.toggle_pause),
-            self.sensitivity_menu,
-            self.auto_send_item,
             None,
+            self.sensitivity_menu,
+            self.output_menu,
+            self.model_menu,
+            self.sound_item,
+            None,
+            self.recent_menu,
+            self.stats_item,
             self.status_item,
         ]
-
-        # Start background threads
-        self.start_background_threads()
 
     def set_state(self, state):
         """Update current state and menu bar icon."""
         self.state = state
         self.title = STATE_ICONS.get(state, "🎤")
         try:
-            self.status_item.title = f"Status: {state.capitalize()}"
+            self.status_item.title = f"Status: {STATE_DESCRIPTIONS.get(state, state)}"
         except:
             pass
 
@@ -360,25 +473,89 @@ class VoiceToClaudeApp(rumps.App):
             self.audio_engine.paused = False
             sender.title = "Pause"
             self.set_state(State.READY)
+            if CONFIG.get("sound_effects"):
+                self.output_handler.play_sound("Pop")
         else:
             self.paused = True
             self.audio_engine.paused = True
             sender.title = "Resume"
             self.set_state(State.PAUSED)
+            if CONFIG.get("sound_effects"):
+                self.output_handler.play_sound("Blow")
 
     def set_sensitivity(self, sender):
         """Change microphone sensitivity."""
         new_threshold = self.sensitivity_levels.get(sender.title, 1500)
         CONFIG["speech_threshold"] = new_threshold
         self.audio_engine.config["speech_threshold"] = new_threshold
+        save_config(CONFIG)
 
         for item in self.sensitivity_menu.values():
             item.state = 1 if item.title == sender.title else 0
 
-    def toggle_auto_send(self, sender):
-        """Toggle auto-send (Enter after paste)."""
-        CONFIG["auto_send"] = not CONFIG["auto_send"]
-        sender.state = 1 if CONFIG["auto_send"] else 0
+    def set_output_mode(self, sender):
+        """Change output mode."""
+        mode = self.output_modes.get(sender.title, "paste_send")
+        CONFIG["auto_send"] = (mode == "paste_send")
+        CONFIG["output_mode"] = mode
+        save_config(CONFIG)
+
+        for item in self.output_menu.values():
+            item.state = 1 if item.title == sender.title else 0
+
+    def set_model(self, sender):
+        """Change Whisper model (requires restart)."""
+        models = {"Base (fast)": "base", "Small (accurate)": "small"}
+        new_model = models.get(sender.title, "base")
+
+        if new_model != CONFIG["model"]:
+            CONFIG["model"] = new_model
+            save_config(CONFIG)
+
+            for item in self.model_menu.values():
+                item.state = 1 if item.title == sender.title else 0
+
+            rumps.alert(
+                title="Model Changed",
+                message=f"Switched to {sender.title}. Restart the app for changes to take effect.",
+                ok="OK"
+            )
+
+    def toggle_sound(self, sender):
+        """Toggle sound effects."""
+        CONFIG["sound_effects"] = not CONFIG.get("sound_effects", True)
+        sender.state = 1 if CONFIG["sound_effects"] else 0
+        save_config(CONFIG)
+
+    def add_recent_transcription(self, text):
+        """Add a transcription to the recent list."""
+        # Truncate long text
+        display_text = text[:50] + "..." if len(text) > 50 else text
+        timestamp = datetime.now().strftime("%H:%M")
+
+        self.recent_transcriptions.insert(0, (timestamp, text, display_text))
+        self.recent_transcriptions = self.recent_transcriptions[:10]  # Keep last 10
+
+        # Update menu
+        self.recent_menu.clear()
+        for ts, full_text, display in self.recent_transcriptions:
+            item = rumps.MenuItem(
+                f"[{ts}] {display}",
+                callback=lambda sender, t=full_text: pyperclip.copy(t)
+            )
+            self.recent_menu.add(item)
+
+    def update_stats(self, text):
+        """Update session statistics."""
+        word_count = len(text.split())
+        self.session_transcriptions += 1
+        self.session_words += word_count
+
+        CONFIG["total_transcriptions"] = CONFIG.get("total_transcriptions", 0) + 1
+        CONFIG["total_words"] = CONFIG.get("total_words", 0) + word_count
+        save_config(CONFIG)
+
+        self.stats_item.title = f"Session: {self.session_transcriptions} transcriptions, {self.session_words} words"
 
     def start_background_threads(self):
         """Start model loading and listening threads."""
@@ -390,6 +567,9 @@ class VoiceToClaudeApp(rumps.App):
         try:
             self.transcription_engine.load_model()
             self.set_state(State.READY)
+
+            if CONFIG.get("sound_effects"):
+                self.output_handler.play_sound("Glass")
 
             self.audio_engine.running = True
             listen_thread = threading.Thread(target=self._listen_loop, daemon=True)
@@ -421,10 +601,21 @@ class VoiceToClaudeApp(rumps.App):
                 if text and self.running and not self.paused:
                     self.set_state(State.SENDING)
 
-                    if CONFIG["auto_send"]:
+                    # Update stats and history
+                    self.update_stats(text)
+                    self.add_recent_transcription(text)
+
+                    # Output based on mode
+                    output_mode = CONFIG.get("output_mode", "paste_send")
+                    if output_mode == "paste_send":
                         self.output_handler.paste_and_send(text)
-                    else:
+                    elif output_mode == "paste_only":
                         self.output_handler.paste_only(text)
+                    else:
+                        self.output_handler.copy_only(text)
+
+                    if CONFIG.get("sound_effects"):
+                        self.output_handler.play_sound("Tink")
 
                     time.sleep(0.3)
 
