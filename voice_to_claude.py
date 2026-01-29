@@ -560,13 +560,10 @@ class VoiceToClaudeApp(rumps.App):
 
     def _populate_device_menu(self):
         """Populate the input device menu."""
-        self.device_menu.clear()
-
         # Default device option
         default_item = rumps.MenuItem("System Default", callback=self.set_device)
         default_item.state = 1 if CONFIG.get("input_device") is None else 0
         self.device_menu.add(default_item)
-        self.device_menu.add(None)  # Separator
 
         # List all input devices
         try:
