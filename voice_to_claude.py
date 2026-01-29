@@ -35,7 +35,7 @@ import pyaudio
 import pyperclip
 import rumps
 
-__version__ = "1.4.0"
+__version__ = "1.4.1"
 __author__ = "Waleed Judah"
 
 # ============================================================================
@@ -56,7 +56,7 @@ DEFAULT_CONFIG = {
 
     # Voice detection
     "silence_threshold": 800,
-    "speech_threshold": 1500,
+    "speech_threshold": 2000,  # Raised from 1500 to reduce false triggers
     "silence_duration": 1.0,
     "min_speech_duration": 0.3,
 
@@ -346,22 +346,46 @@ class TranscriptionEngine:
 
     def _is_hallucination(self, text):
         """Filter out Whisper hallucinations (junk output on noise)."""
+        import re
+
+        text_stripped = text.strip()
+        text_lower = text_stripped.lower()
+
+        # Very short text is often hallucination
+        if len(text_stripped) < 3:
+            return True
+
+        # Just numbers, percentages, or decimals (e.g., "1.5%", "2.0", "1.1.1")
+        if re.match(r'^[\d\.\,\%\s\-]+$', text_stripped):
+            return True
+
+        # Just punctuation and numbers
+        if re.match(r'^[\d\.\,\%\s\-\!\?\.\,\:\;]+$', text_stripped):
+            return True
+
+        # Common junk patterns
         junk_patterns = [
-            "1.1", "...", "♪", "***", "---", "___",
-            "Thank you", "Thanks for watching",
-            "Subscribe", "Bye", "See you",
+            "1.1", "1.5", "2.0", "...", "♪", "***", "---", "___",
+            "Thank you", "Thanks for watching", "Thanks for listening",
+            "Subscribe", "Bye", "See you", "Goodbye",
             "Please subscribe", "Like and subscribe",
-            "Thank you for watching", "Thanks for listening",
+            "Thank you for watching", "You're welcome",
+            "I'm sorry", "Okay", "OK", "Hmm", "Uh",
+            "silence", "music", "applause", "laughter",
         ]
 
-        text_lower = text.lower()
+        # Check for exact matches (short hallucinations)
+        if text_lower in [p.lower() for p in junk_patterns]:
+            return True
+
+        # Check for repeated patterns
         for pattern in junk_patterns:
             if text.count(pattern) > 2 or text_lower.count(pattern.lower()) > 2:
                 return True
 
         # Check if mostly non-alphanumeric
-        alpha_count = sum(1 for c in text if c.isalnum() or c.isspace())
-        if len(text) > 5 and alpha_count < len(text) * 0.5:
+        alpha_count = sum(1 for c in text if c.isalpha())
+        if len(text_stripped) > 5 and alpha_count < len(text_stripped) * 0.3:
             return True
 
         # Check for excessive repetition
@@ -370,6 +394,10 @@ class TranscriptionEngine:
             unique_words = set(w.lower() for w in words)
             if len(unique_words) < len(words) * 0.3:
                 return True
+
+        # Single word that's just a number or very short
+        if len(words) == 1 and (text_stripped.replace('.', '').replace('%', '').isdigit() or len(text_stripped) < 4):
+            return True
 
         return False
 
@@ -652,11 +680,12 @@ class VoiceToClaudeApp(rumps.App):
         )
         self.output_handler = OutputHandler()
 
-        # Sensitivity levels
+        # Sensitivity levels (higher number = less sensitive, needs louder speech)
         self.sensitivity_levels = {
+            "Very Low (very noisy)": 3500,
             "Low (noisy room)": 2500,
-            "Medium": 1500,
-            "High (quiet room)": 800,
+            "Medium": 2000,
+            "High (quiet room)": 1200,
         }
 
         # Output modes
