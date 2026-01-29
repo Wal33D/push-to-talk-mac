@@ -197,6 +197,7 @@ class AudioEngine:
         silent_chunks = 0
         speech_chunks = 0
         has_speech = False
+        total_chunks = 0
 
         rate = self.config["rate"]
         chunk = self.config["chunk"]
@@ -206,6 +207,8 @@ class AudioEngine:
 
         chunks_for_silence = int(silence_duration * rate / chunk)
         chunks_for_min_speech = int(min_speech_duration * rate / chunk)
+        max_listen_chunks = int(30 * rate / chunk)  # 30 second timeout
+        max_record_chunks = int(120 * rate / chunk)  # 2 minute max recording
 
         self.state_callback(State.LISTENING)
 
@@ -218,6 +221,15 @@ class AudioEngine:
 
                 frames.append(data)
                 level = self.get_audio_level(data)
+                total_chunks += 1
+
+                # Timeout: if listening for too long with no speech, reset
+                if not has_speech and total_chunks > max_listen_chunks:
+                    break
+
+                # Timeout: if recording for too long, stop
+                if has_speech and total_chunks > max_record_chunks:
+                    break
 
                 if level > speech_threshold:
                     speech_chunks += 1
@@ -474,6 +486,12 @@ class VoiceToClaudeApp(rumps.App):
         self.recent_menu = rumps.MenuItem("Recent Transcriptions")
         self.recent_menu.add(rumps.MenuItem("(none yet)"))
 
+        # Calibrate option
+        self.calibrate_item = rumps.MenuItem("Calibrate Microphone", callback=self.calibrate_mic)
+
+        # About
+        self.about_item = rumps.MenuItem(f"About (v{__version__})", callback=self.show_about)
+
         self.menu = [
             rumps.MenuItem("Pause", callback=self.toggle_pause),
             None,
@@ -483,9 +501,12 @@ class VoiceToClaudeApp(rumps.App):
             self.device_menu,
             self.sound_item,
             None,
+            self.calibrate_item,
             self.recent_menu,
             self.stats_item,
             self.status_item,
+            None,
+            self.about_item,
         ]
 
     def set_state(self, state):
@@ -591,6 +612,97 @@ class VoiceToClaudeApp(rumps.App):
                 continue
             expected_index = getattr(item, 'device_index', None)
             item.state = 1 if expected_index == device_index else 0
+
+    def calibrate_mic(self, sender):
+        """Calibrate microphone by measuring ambient noise level."""
+        # Pause listening during calibration
+        was_paused = self.paused
+        self.paused = True
+        self.audio_engine.paused = True
+
+        rumps.alert(
+            title="Calibrating Microphone",
+            message="Stay quiet for 3 seconds to measure background noise...",
+            ok="Start"
+        )
+
+        try:
+            p = pyaudio.PyAudio()
+            stream_kwargs = {
+                'format': pyaudio.paInt16,
+                'channels': CONFIG["channels"],
+                'rate': CONFIG["rate"],
+                'input': True,
+                'frames_per_buffer': CONFIG["chunk"],
+            }
+            if CONFIG.get("input_device") is not None:
+                stream_kwargs['input_device_index'] = CONFIG["input_device"]
+
+            stream = p.open(**stream_kwargs)
+
+            levels = []
+            for _ in range(int(3 * CONFIG["rate"] / CONFIG["chunk"])):
+                data = stream.read(CONFIG["chunk"], exception_on_overflow=False)
+                level = self.audio_engine.get_audio_level(data)
+                levels.append(level)
+
+            stream.stop_stream()
+            stream.close()
+            p.terminate()
+
+            avg_level = sum(levels) / len(levels)
+            max_level = max(levels)
+
+            # Suggest threshold at 2x max level
+            suggested = int(max_level * 2) + 100
+            suggested = max(500, min(3000, suggested))  # Clamp to reasonable range
+
+            result = rumps.alert(
+                title="Calibration Complete",
+                message=f"Background noise:\n"
+                        f"  Average: {int(avg_level)}\n"
+                        f"  Peak: {int(max_level)}\n\n"
+                        f"Suggested threshold: {suggested}\n"
+                        f"Current threshold: {CONFIG['speech_threshold']}\n\n"
+                        f"Apply suggested threshold?",
+                ok="Apply",
+                cancel="Cancel"
+            )
+
+            if result == 1:  # OK clicked
+                CONFIG["speech_threshold"] = suggested
+                self.audio_engine.config["speech_threshold"] = suggested
+                save_config(CONFIG)
+
+                # Update sensitivity menu checkmarks
+                for item in self.sensitivity_menu.values():
+                    item.state = 0
+
+        except Exception as e:
+            rumps.alert(title="Calibration Failed", message=str(e))
+
+        # Resume if wasn't paused
+        if not was_paused:
+            self.paused = False
+            self.audio_engine.paused = False
+
+    def show_about(self, sender):
+        """Show about dialog."""
+        total_transcriptions = CONFIG.get("total_transcriptions", 0)
+        total_words = CONFIG.get("total_words", 0)
+
+        rumps.alert(
+            title="Voice to Claude",
+            message=f"Version {__version__}\n"
+                    f"By {__author__}\n\n"
+                    f"A hands-free voice dictation tool\n"
+                    f"for macOS menu bar.\n\n"
+                    f"Lifetime stats:\n"
+                    f"  {total_transcriptions} transcriptions\n"
+                    f"  {total_words} words\n\n"
+                    f"github.com/Wal33D/voice-to-claude",
+            ok="OK"
+        )
 
     def add_recent_transcription(self, text):
         """Add a transcription to the recent list."""
