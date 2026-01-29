@@ -36,7 +36,7 @@ import pyaudio
 import pyperclip
 import rumps
 
-__version__ = "1.6.1"
+__version__ = "1.7.0"
 __author__ = "Waleed Judah"
 
 # ============================================================================
@@ -487,6 +487,20 @@ class DictationProcessor:
         "frowny face": ":(",
         "wink": ";)",
         "heart": "<3",
+
+        # Markdown formatting (spoken wrappers)
+        "bold start": "**",
+        "bold end": "**",
+        "italic start": "*",
+        "italic end": "*",
+        "code start": "`",
+        "code end": "`",
+        "strike start": "~~",
+        "strike end": "~~",
+        "link start": "[",
+        "link end": "]",
+        "bullet point": "- ",
+        "numbered": "1. ",
     }
 
     # Commands that should remove preceding space
@@ -499,6 +513,21 @@ class DictationProcessor:
         r'\bi\'ll\b': "I'll",
         r'\bi\'ve\b': "I've",
         r'\bi\'d\b': "I'd",
+        r'\bim\b': "I'm",  # Common speech-to-text error
+        r'\bdont\b': "don't",
+        r'\bwont\b': "won't",
+        r'\bcant\b': "can't",
+        r'\bwouldnt\b': "wouldn't",
+        r'\bcouldnt\b': "couldn't",
+        r'\bshouldnt\b': "shouldn't",
+        r'\bdidnt\b': "didn't",
+        r'\bisnt\b': "isn't",
+        r'\barent\b': "aren't",
+        r'\bwasnt\b': "wasn't",
+        r'\bwerent\b': "weren't",
+        r'\bhasnt\b': "hasn't",
+        r'\bhavent\b': "haven't",
+        r'\bhadnt\b': "hadn't",
     }
 
     @classmethod
@@ -799,7 +828,13 @@ class VoiceToClaudeApp(rumps.App):
 
         # Model submenu
         self.model_menu = rumps.MenuItem("Whisper Model")
-        models = {"Base (fast)": "base", "Small (accurate)": "small"}
+        models = {
+            "Tiny (fastest)": "tiny",
+            "Base (fast)": "base",
+            "Small (balanced)": "small",
+            "Medium (accurate)": "medium",
+            "Large (best)": "large-v3",
+        }
         for name, model in models.items():
             item = rumps.MenuItem(name, callback=self.set_model)
             if model == CONFIG["model"]:
@@ -978,7 +1013,13 @@ class VoiceToClaudeApp(rumps.App):
 
     def set_model(self, sender):
         """Change Whisper model (requires restart)."""
-        models = {"Base (fast)": "base", "Small (accurate)": "small"}
+        models = {
+            "Tiny (fastest)": "tiny",
+            "Base (fast)": "base",
+            "Small (balanced)": "small",
+            "Medium (accurate)": "medium",
+            "Large (best)": "large-v3",
+        }
         new_model = models.get(sender.title, "base")
 
         if new_model != CONFIG["model"]:
