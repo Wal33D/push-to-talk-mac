@@ -36,7 +36,21 @@ import pyaudio
 import pyperclip
 import rumps
 
-__version__ = "1.8.1"
+# Optional: pynput for push-to-talk global hotkey
+try:
+    from pynput import keyboard as pynput_keyboard
+    HAS_PYNPUT = True
+except ImportError:
+    HAS_PYNPUT = False
+
+# Quartz for Fn/Globe key detection (modifier flag monitoring)
+try:
+    import Quartz
+    HAS_QUARTZ = True
+except ImportError:
+    HAS_QUARTZ = False
+
+__version__ = "1.9.1"
 __author__ = "Waleed Judah"
 
 # ============================================================================
@@ -79,6 +93,10 @@ DEFAULT_CONFIG = {
     "recording_sound": False,  # Play sound when recording starts
     "append_mode": False,  # Append to clipboard instead of replacing
     "custom_replacements": {},  # User-defined text replacements
+
+    # Push-to-Talk
+    "ptt_mode": False,  # False = continuous listening, True = push-to-talk
+    "ptt_key": "fn",  # Key to hold for PTT
 }
 
 def load_config():
@@ -286,6 +304,277 @@ class AudioEngine:
         except Exception as e:
             print(f"Failed to save audio: {e}")
             return None
+
+    def record_until_released(self, stop_event):
+        """Record audio until stop_event is set (key released). For PTT mode."""
+        p = pyaudio.PyAudio()
+
+        try:
+            stream_kwargs = {
+                'format': pyaudio.paInt16,
+                'channels': self.config["channels"],
+                'rate': self.config["rate"],
+                'input': True,
+                'frames_per_buffer': self.config["chunk"],
+            }
+            if self.device_index is not None:
+                stream_kwargs['input_device_index'] = self.device_index
+
+            stream = p.open(**stream_kwargs)
+        except Exception as e:
+            print(f"PTT: Failed to open audio stream: {e}")
+            self.state_callback(State.ERROR)
+            return None
+
+        frames = []
+        rate = self.config["rate"]
+        chunk = self.config["chunk"]
+        max_chunks = int(120 * rate / chunk)  # 2 minute cap
+        min_record_chunks = int(0.5 * rate / chunk)  # Record at least 0.5s no matter what
+        tail_chunks = int(0.3 * rate / chunk)  # 0.3s extra after key release
+        total_chunks = 0
+        released = False
+
+        self.state_callback(State.SPEAKING)
+
+        try:
+            while total_chunks < max_chunks:
+                try:
+                    data = stream.read(chunk, exception_on_overflow=False)
+                except Exception:
+                    continue
+                frames.append(data)
+                total_chunks += 1
+
+                # Don't check stop_event until we've recorded the minimum
+                if total_chunks < min_record_chunks:
+                    continue
+
+                # After minimum, check if key was released
+                if not released and stop_event.is_set():
+                    released = True
+                    tail_remaining = tail_chunks
+
+                # Record tail buffer after release for trailing audio
+                if released:
+                    tail_remaining -= 1
+                    if tail_remaining <= 0:
+                        break
+        except Exception as e:
+            print(f"PTT recording error: {e}")
+            self.state_callback(State.ERROR)
+            return None
+        finally:
+            stream.stop_stream()
+            stream.close()
+            p.terminate()
+
+        # Skip only if extremely short (< 0.3s of actual audio)
+        min_useful_chunks = int(0.3 * rate / chunk)
+        if total_chunks < min_useful_chunks:
+            return None
+
+        # Save to temp file
+        try:
+            with tempfile.NamedTemporaryFile(suffix='.wav', delete=False) as f:
+                wf = wave.open(f.name, 'wb')
+                wf.setnchannels(self.config["channels"])
+                wf.setsampwidth(2)
+                wf.setframerate(self.config["rate"])
+                wf.writeframes(b''.join(frames))
+                wf.close()
+                return f.name
+        except Exception as e:
+            print(f"PTT: Failed to save audio: {e}")
+            return None
+
+# ============================================================================
+# KEY LISTENER (Push-to-Talk)
+# ============================================================================
+
+# Fn/Globe key modifier flag on macOS
+_FN_FLAG = 0x800000  # NX_SECONDARYFNMASK / kCGEventFlagMaskSecondaryFn
+
+
+class FnKeyMonitor:
+    """Monitors the Fn/Globe key via Quartz modifier flag changes.
+
+    The Fn key doesn't fire normal key events — it only toggles a modifier
+    flag bit (0x800000). This class uses a CGEventTap on flagsChanged events
+    to detect press/release.
+    """
+
+    def __init__(self, on_press_cb, on_release_cb):
+        self.on_press_cb = on_press_cb
+        self.on_release_cb = on_release_cb
+        self._fn_down = False
+        self._tap = None
+        self._source = None
+        self._thread = None
+
+    def start(self):
+        if not HAS_QUARTZ or self._thread is not None:
+            return
+        self._fn_down = False
+        self._thread = threading.Thread(target=self._run, daemon=True)
+        self._thread.start()
+
+    def stop(self):
+        if self._source is not None:
+            try:
+                Quartz.CFRunLoopSourceInvalidate(self._source)
+            except Exception:
+                pass
+        if self._tap is not None:
+            try:
+                Quartz.CGEventTapEnable(self._tap, False)
+            except Exception:
+                pass
+        self._tap = None
+        self._source = None
+        self._thread = None
+        self._fn_down = False
+
+    def _callback(self, proxy, event_type, event, refcon):
+        flags = Quartz.CGEventGetFlags(event)
+        fn_now = bool(flags & _FN_FLAG)
+
+        if fn_now and not self._fn_down:
+            self._fn_down = True
+            self.on_press_cb()
+        elif not fn_now and self._fn_down:
+            self._fn_down = False
+            self.on_release_cb()
+
+        return event
+
+    def _run(self):
+        tap = Quartz.CGEventTapCreate(
+            Quartz.kCGSessionEventTap,
+            Quartz.kCGHeadInsertEventTap,
+            Quartz.kCGEventTapOptionListenOnly,
+            Quartz.CGEventMaskBit(Quartz.kCGEventFlagsChanged),
+            self._callback,
+            None,
+        )
+        if tap is None:
+            print("PTT: Could not create event tap for Fn key. "
+                  "Grant Accessibility permission and retry.")
+            return
+
+        self._tap = tap
+        self._source = Quartz.CFMachPortCreateRunLoopSource(None, tap, 0)
+        loop = Quartz.CFRunLoopGetCurrent()
+        Quartz.CFRunLoopAddSource(loop, self._source, Quartz.kCFRunLoopDefaultMode)
+        Quartz.CGEventTapEnable(tap, True)
+        Quartz.CFRunLoopRun()
+
+
+class KeyListener:
+    """Global hotkey listener for push-to-talk mode.
+
+    Uses FnKeyMonitor (Quartz) for the Fn/Globe key, pynput for all others.
+    """
+
+    # Map config key names to pynput key objects
+    KEY_MAP = {
+        "fn": None,  # Handled by FnKeyMonitor, not pynput
+        "right_option": "Key.alt_r",
+        "right_command": "Key.cmd_r",
+        "right_shift": "Key.shift_r",
+        "left_option": "Key.alt",
+        "f18": "Key.f18",
+        "f19": "Key.f19",
+        "f17": "Key.f17",
+    }
+
+    # Human-readable names for the menu
+    KEY_DISPLAY_NAMES = {
+        "fn": "Fn (Globe)",
+        "right_option": "Right Option",
+        "right_command": "Right Command",
+        "right_shift": "Right Shift",
+        "left_option": "Left Option",
+        "f18": "F18",
+        "f19": "F19",
+        "f17": "F17",
+    }
+
+    def __init__(self, key_name, on_press_cb, on_release_cb):
+        self.key_name = key_name
+        self.on_press_cb = on_press_cb
+        self.on_release_cb = on_release_cb
+        self.is_pressed = False
+        self._listener = None       # pynput listener (non-Fn keys)
+        self._fn_monitor = None     # Quartz Fn monitor
+        self._target_key = self._resolve_key(key_name)
+
+    def _resolve_key(self, key_name):
+        """Resolve a config key name to a pynput key object (None for Fn)."""
+        if key_name == "fn":
+            return None  # Fn uses FnKeyMonitor
+        if not HAS_PYNPUT:
+            return None
+        key_str = self.KEY_MAP.get(key_name, "Key.alt_r")
+        try:
+            return getattr(pynput_keyboard.Key, key_str.split(".")[-1])
+        except AttributeError:
+            return pynput_keyboard.Key.alt_r
+
+    def set_key(self, key_name):
+        """Change the PTT key. Restarts the listener if running."""
+        was_running = self._listener is not None or self._fn_monitor is not None
+        if was_running:
+            self.stop()
+        self.key_name = key_name
+        self._target_key = self._resolve_key(key_name)
+        if was_running:
+            self.start()
+
+    def start(self):
+        """Start listening for the global hotkey."""
+        if self._listener is not None or self._fn_monitor is not None:
+            return
+        self.is_pressed = False
+
+        if self.key_name == "fn":
+            # Use Quartz monitor for Fn key
+            if HAS_QUARTZ:
+                self._fn_monitor = FnKeyMonitor(self.on_press_cb, self.on_release_cb)
+                self._fn_monitor.start()
+            else:
+                print("PTT: Quartz not available for Fn key detection")
+        else:
+            # Use pynput for all other keys
+            if HAS_PYNPUT:
+                self._listener = pynput_keyboard.Listener(
+                    on_press=self._on_press,
+                    on_release=self._on_release,
+                )
+                self._listener.daemon = True
+                self._listener.start()
+
+    def stop(self):
+        """Stop the global hotkey listener."""
+        if self._listener is not None:
+            self._listener.stop()
+            self._listener = None
+        if self._fn_monitor is not None:
+            self._fn_monitor.stop()
+            self._fn_monitor = None
+        self.is_pressed = False
+
+    def _on_press(self, key):
+        """Handle key press event (pynput)."""
+        if key == self._target_key and not self.is_pressed:
+            self.is_pressed = True
+            self.on_press_cb()
+
+    def _on_release(self, key):
+        """Handle key release event (pynput)."""
+        if key == self._target_key and self.is_pressed:
+            self.is_pressed = False
+            self.on_release_cb()
 
 # ============================================================================
 # TRANSCRIPTION ENGINE
@@ -972,6 +1261,11 @@ class VoiceToClaudeApp(rumps.App):
         self.last_original_text = None  # For undo feature
         self.last_processed_text = None
 
+        # Push-to-Talk state
+        self.ptt_mode = CONFIG.get("ptt_mode", False)
+        self.ptt_stop_event = threading.Event()
+        self.ptt_recording = False
+
         # Initialize components
         self.audio_engine = AudioEngine(CONFIG, self.set_state, self.on_recording_start)
         self.transcription_engine = TranscriptionEngine(
@@ -979,6 +1273,16 @@ class VoiceToClaudeApp(rumps.App):
             CONFIG.get("language")
         )
         self.output_handler = OutputHandler()
+
+        # Key listener for PTT (Fn key uses Quartz, others use pynput)
+        if HAS_PYNPUT or HAS_QUARTZ:
+            self.key_listener = KeyListener(
+                CONFIG.get("ptt_key", "fn"),
+                self._ptt_key_pressed,
+                self._ptt_key_released,
+            )
+        else:
+            self.key_listener = None
 
         # Sensitivity levels (higher number = less sensitive, needs louder speech)
         self.sensitivity_levels = {
@@ -1016,6 +1320,29 @@ class VoiceToClaudeApp(rumps.App):
         """Build the menu bar menu."""
         self.status_item = rumps.MenuItem("Status: Loading...")
         self.stats_item = rumps.MenuItem("Session: 0 transcriptions, 0 words")
+
+        # Listening Mode submenu (Continuous vs Push-to-Talk)
+        self.listening_mode_menu = rumps.MenuItem("Listening Mode")
+        continuous_item = rumps.MenuItem("Continuous", callback=self.set_listening_mode)
+        continuous_item.mode_value = False
+        continuous_item.state = 0 if self.ptt_mode else 1
+        self.listening_mode_menu.add(continuous_item)
+
+        ptt_label = "Push-to-Talk" if HAS_PYNPUT else "Push-to-Talk (install pynput)"
+        ptt_item = rumps.MenuItem(ptt_label, callback=self.set_listening_mode)
+        ptt_item.mode_value = True
+        ptt_item.state = 1 if self.ptt_mode else 0
+        self.listening_mode_menu.add(ptt_item)
+
+        # PTT Key submenu
+        self.ptt_key_menu = rumps.MenuItem("PTT Key")
+        current_ptt_key = CONFIG.get("ptt_key", "right_option")
+        for key_name, display_name in KeyListener.KEY_DISPLAY_NAMES.items():
+            item = rumps.MenuItem(display_name, callback=self.set_ptt_key)
+            item.key_name = key_name
+            if key_name == current_ptt_key:
+                item.state = 1
+            self.ptt_key_menu.add(item)
 
         # Sensitivity submenu
         self.sensitivity_menu = rumps.MenuItem("Sensitivity")
@@ -1146,6 +1473,8 @@ class VoiceToClaudeApp(rumps.App):
         self.menu = [
             rumps.MenuItem("Pause", callback=self.toggle_pause),
             None,
+            self.listening_mode_menu,
+            self.ptt_key_menu,
             self.sensitivity_menu,
             self.pause_menu,
             self.output_menu,
@@ -1179,7 +1508,13 @@ class VoiceToClaudeApp(rumps.App):
         self.state = state
         self.title = STATE_ICONS.get(state, "🎤")
         try:
-            self.status_item.title = f"Status: {STATE_DESCRIPTIONS.get(state, state)}"
+            if self.ptt_mode and state == State.READY:
+                key_display = KeyListener.KEY_DISPLAY_NAMES.get(
+                    CONFIG.get("ptt_key", "right_option"), "Right Option"
+                )
+                self.status_item.title = f"Status: PTT Ready — Hold {key_display}"
+            else:
+                self.status_item.title = f"Status: {STATE_DESCRIPTIONS.get(state, state)}"
         except:
             pass
 
@@ -1192,11 +1527,180 @@ class VoiceToClaudeApp(rumps.App):
                 daemon=True
             ).start()
 
+    # ---- Push-to-Talk methods ----
+
+    def set_listening_mode(self, sender):
+        """Switch between continuous and push-to-talk modes."""
+        want_ptt = getattr(sender, 'mode_value', False)
+
+        if want_ptt and not HAS_PYNPUT and not HAS_QUARTZ:
+            rumps.alert(
+                title="pynput Required",
+                message="Push-to-Talk requires the pynput package.\n\n"
+                        "Install it with:\n  pip3 install pynput\n\n"
+                        "Then restart Voice to Claude.",
+                ok="OK"
+            )
+            return
+
+        self.ptt_mode = want_ptt
+        CONFIG["ptt_mode"] = want_ptt
+        save_config(CONFIG)
+
+        # Update checkmarks
+        for item in self.listening_mode_menu.values():
+            item.state = 1 if getattr(item, 'mode_value', None) == want_ptt else 0
+
+        if want_ptt:
+            # Pause continuous listening, start key listener
+            self.audio_engine.paused = True
+            if self.key_listener:
+                self.key_listener.start()
+            self.set_state(State.READY)
+            if CONFIG.get("sound_effects"):
+                self.output_handler.play_sound("Pop")
+        else:
+            # Stop key listener, resume continuous listening
+            if self.key_listener:
+                self.key_listener.stop()
+            self.audio_engine.paused = self.paused  # Restore paused state
+            self.set_state(State.PAUSED if self.paused else State.READY)
+            if CONFIG.get("sound_effects"):
+                self.output_handler.play_sound("Pop")
+
+    def set_ptt_key(self, sender):
+        """Change the push-to-talk key."""
+        key_name = getattr(sender, 'key_name', 'right_option')
+        CONFIG["ptt_key"] = key_name
+        save_config(CONFIG)
+
+        if self.key_listener:
+            self.key_listener.set_key(key_name)
+
+        for item in self.ptt_key_menu.values():
+            item.state = 1 if getattr(item, 'key_name', None) == key_name else 0
+
+        # Update status text if in PTT mode
+        if self.ptt_mode:
+            self.set_state(State.READY)
+
+    def _ptt_key_pressed(self):
+        """Called when PTT key is pressed down."""
+        if self.ptt_recording or self.paused:
+            return
+        if self.state == State.LOADING:
+            return
+        self.ptt_recording = True
+        self.ptt_stop_event.clear()
+
+        # Play a ding sound when PTT key is pressed
+        threading.Thread(
+            target=lambda: self.output_handler.play_sound("Tink"),
+            daemon=True
+        ).start()
+
+        # Spawn recording thread
+        t = threading.Thread(target=self._ptt_record_and_transcribe, daemon=True)
+        t.start()
+
+    def _ptt_key_released(self):
+        """Called when PTT key is released."""
+        self.ptt_stop_event.set()
+
+    def _ptt_record_and_transcribe(self):
+        """Record while key held, then transcribe and output. Runs in daemon thread."""
+        try:
+            audio_file = self.audio_engine.record_until_released(self.ptt_stop_event)
+
+            if audio_file:
+                self.set_state(State.PROCESSING)
+                text = self.transcription_engine.transcribe(audio_file)
+
+                try:
+                    os.unlink(audio_file)
+                except:
+                    pass
+
+                if text:
+                    self._output_text(text)
+        except Exception as e:
+            print(f"PTT error: {e}")
+        finally:
+            self.ptt_recording = False
+            if self.ptt_mode:
+                self.set_state(State.READY)
+
+    def _output_text(self, text):
+        """Process and output transcribed text. Shared by continuous and PTT modes."""
+        # Check for control commands first
+        control_cmd = DictationProcessor.check_control_command(text)
+
+        if control_cmd == "SCRATCH":
+            if CONFIG.get("sound_effects"):
+                self.output_handler.play_sound("Basso")
+            script = 'tell application "System Events" to keystroke "z" using command down'
+            subprocess.run(['osascript', '-e', script], capture_output=True, timeout=2)
+            return
+
+        elif control_cmd == "CANCEL":
+            if CONFIG.get("sound_effects"):
+                self.output_handler.play_sound("Basso")
+            return
+
+        elif control_cmd == "REPEAT":
+            if self.last_processed_text:
+                processed_text = self.last_processed_text
+            else:
+                return
+        else:
+            # Normal processing
+            self.set_state(State.SENDING)
+            self.last_original_text = text
+            processed_text = DictationProcessor.process(
+                text,
+                enabled=CONFIG.get("dictation_commands", True),
+                auto_capitalize=CONFIG.get("auto_capitalize", True),
+                smart_punctuation=CONFIG.get("smart_punctuation", True)
+            )
+            self.last_processed_text = processed_text
+
+        self.set_state(State.SENDING)
+
+        # Update stats and history
+        self.update_stats(processed_text)
+        self.add_recent_transcription(processed_text)
+
+        # Output based on mode
+        output_mode = CONFIG.get("output_mode", "paste_send")
+        send_key = CONFIG.get("send_key", "return")
+        append_mode = CONFIG.get("append_mode", False)
+
+        if output_mode == "paste_send":
+            self.output_handler.paste_and_send(processed_text, send_key, append_mode)
+        elif output_mode == "paste_only":
+            self.output_handler.paste_only(processed_text, append_mode)
+        elif output_mode == "type_send":
+            self.output_handler.type_and_send(processed_text, send_key)
+        elif output_mode == "type_only":
+            self.output_handler.type_text(processed_text)
+        else:
+            self.output_handler.copy_only(processed_text)
+
+        if CONFIG.get("sound_effects"):
+            self.output_handler.play_sound("Tink")
+
+        if CONFIG.get("show_notifications"):
+            preview = processed_text[:50] + "..." if len(processed_text) > 50 else processed_text
+            self.output_handler.show_notification("Voice to Claude", preview)
+
     def toggle_pause(self, sender):
         """Toggle pause/resume listening."""
         if self.paused:
             self.paused = False
-            self.audio_engine.paused = False
+            if not self.ptt_mode:
+                self.audio_engine.paused = False
+            elif self.key_listener:
+                self.key_listener.start()
             sender.title = "Pause"
             self.set_state(State.READY)
             if CONFIG.get("sound_effects"):
@@ -1204,6 +1708,8 @@ class VoiceToClaudeApp(rumps.App):
         else:
             self.paused = True
             self.audio_engine.paused = True
+            if self.ptt_mode and self.key_listener:
+                self.key_listener.stop()
             sender.title = "Resume"
             self.set_state(State.PAUSED)
             if CONFIG.get("sound_effects"):
@@ -1518,10 +2024,16 @@ class VoiceToClaudeApp(rumps.App):
         rumps.alert(
             title="Voice to Claude - Quick Help",
             message="How to use:\n\n"
+                    "Continuous mode:\n"
                     "1. Look for 🎤 in the menu bar (ready state)\n"
                     "2. Speak naturally - it auto-detects speech\n"
                     "3. Pause briefly when done speaking\n"
                     "4. Text is transcribed and pasted\n\n"
+                    "Push-to-Talk mode:\n"
+                    "1. Enable via Listening Mode > Push-to-Talk\n"
+                    "2. Hold the PTT key (default: Right Option)\n"
+                    "3. Speak while holding the key\n"
+                    "4. Release to transcribe and paste\n\n"
                     "Icon states:\n"
                     "  🎤 Ready - listening for speech\n"
                     "  👂 Detecting - heard something\n"
@@ -1531,7 +2043,8 @@ class VoiceToClaudeApp(rumps.App):
                     "Tips:\n"
                     "  • Say 'period', 'comma', 'new line'\n"
                     "  • Adjust sensitivity for your room\n"
-                    "  • Use Calibrate to auto-tune\n\n"
+                    "  • Use Calibrate to auto-tune\n"
+                    "  • Change PTT key in the PTT Key menu\n\n"
                     "For full docs: github.com/Wal33D/voice-to-claude",
             ok="Got it"
         )
@@ -1677,6 +2190,13 @@ class VoiceToClaudeApp(rumps.App):
                 self.output_handler.play_sound("Glass")
 
             self.audio_engine.running = True
+
+            # If PTT mode on startup, pause continuous and start key listener
+            if self.ptt_mode:
+                self.audio_engine.paused = True
+                if self.key_listener:
+                    self.key_listener.start()
+
             listen_thread = threading.Thread(target=self._listen_loop, daemon=True)
             listen_thread.start()
 
@@ -1685,15 +2205,20 @@ class VoiceToClaudeApp(rumps.App):
             self.set_state(State.ERROR)
 
     def _listen_loop(self):
-        """Main listening loop."""
+        """Main listening loop (continuous mode)."""
         while self.running:
+            # In PTT mode, sleep and let the key listener handle recording
+            if self.ptt_mode:
+                time.sleep(0.1)
+                continue
+
             if self.paused:
                 time.sleep(0.1)
                 continue
 
             audio_file = self.audio_engine.record_until_silence()
 
-            if audio_file and self.running and not self.paused:
+            if audio_file and self.running and not self.paused and not self.ptt_mode:
                 self.set_state(State.PROCESSING)
 
                 text = self.transcription_engine.transcribe(audio_file)
@@ -1704,83 +2229,11 @@ class VoiceToClaudeApp(rumps.App):
                     pass
 
                 if text and self.running and not self.paused:
-                    # Check for control commands first
-                    control_cmd = DictationProcessor.check_control_command(text)
-
-                    if control_cmd == "SCRATCH":
-                        # Delete the last transcription by simulating Cmd+Z
-                        if CONFIG.get("sound_effects"):
-                            self.output_handler.play_sound("Basso")
-                        script = 'tell application "System Events" to keystroke "z" using command down'
-                        subprocess.run(['osascript', '-e', script], capture_output=True, timeout=2)
-                        continue
-
-                    elif control_cmd == "CANCEL":
-                        # Just cancel, don't output anything
-                        if CONFIG.get("sound_effects"):
-                            self.output_handler.play_sound("Basso")
-                        continue
-
-                    elif control_cmd == "REPEAT":
-                        # Repeat the last transcription
-                        if self.last_processed_text:
-                            processed_text = self.last_processed_text
-                        else:
-                            continue
-                    else:
-                        # Normal processing
-                        self.set_state(State.SENDING)
-
-                        # Save original for undo
-                        self.last_original_text = text
-
-                        # Process dictation commands, capitalize, and punctuate
-                        processed_text = DictationProcessor.process(
-                            text,
-                            enabled=CONFIG.get("dictation_commands", True),
-                            auto_capitalize=CONFIG.get("auto_capitalize", True),
-                            smart_punctuation=CONFIG.get("smart_punctuation", True)
-                        )
-                        self.last_processed_text = processed_text
-
-                    self.set_state(State.SENDING)
-
-                    # Update stats and history
-                    self.update_stats(processed_text)
-                    self.add_recent_transcription(processed_text)
-
-                    # Output based on mode
-                    output_mode = CONFIG.get("output_mode", "paste_send")
-                    send_key = CONFIG.get("send_key", "return")
-                    append_mode = CONFIG.get("append_mode", False)
-
-                    if output_mode == "paste_send":
-                        self.output_handler.paste_and_send(processed_text, send_key, append_mode)
-                    elif output_mode == "paste_only":
-                        self.output_handler.paste_only(processed_text, append_mode)
-                    elif output_mode == "type_send":
-                        self.output_handler.type_and_send(processed_text, send_key)
-                    elif output_mode == "type_only":
-                        self.output_handler.type_text(processed_text)
-                    else:
-                        self.output_handler.copy_only(processed_text)
-
-                    if CONFIG.get("sound_effects"):
-                        self.output_handler.play_sound("Tink")
-
-                    # Show notification
-                    if CONFIG.get("show_notifications"):
-                        preview = processed_text[:50] + "..." if len(processed_text) > 50 else processed_text
-                        self.output_handler.show_notification(
-                            "Voice to Claude",
-                            preview
-                        )
-
+                    self._output_text(text)
                     time.sleep(0.3)
 
-            if self.running and not self.paused:
+            if self.running and not self.paused and not self.ptt_mode:
                 self.set_state(State.READY)
-                # Play ready sound if enabled
                 if CONFIG.get("ready_sound"):
                     self.output_handler.play_sound("Pop")
                 time.sleep(0.2)
