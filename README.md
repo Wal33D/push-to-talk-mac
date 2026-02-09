@@ -1,132 +1,80 @@
 # Voice to Claude
 
-A macOS menu bar app for hands-free voice dictation. Continuously listens for speech, transcribes using Whisper AI, and auto-pastes to the active window.
+**macOS push-to-talk voice dictation. Hold Fn to speak, release to paste. Free, local, open source.**
 
-Perfect for dictating to Claude Code, ChatGPT, or any text input without touching the keyboard.
-
-![Menu Bar](https://img.shields.io/badge/macOS-Menu%20Bar%20App-blue)
+![macOS](https://img.shields.io/badge/macOS-12%2B-blue)
+![Apple Silicon](https://img.shields.io/badge/Apple%20Silicon-Required-red)
 ![Python](https://img.shields.io/badge/Python-3.9+-green)
-![Apple Silicon](https://img.shields.io/badge/Apple%20Silicon-Optimized-red)
 ![License](https://img.shields.io/badge/License-MIT-yellow)
 
-## Features
+## Why Voice to Claude?
 
-- **Menu Bar Integration** - Lives in your macOS menu bar, always accessible
-- **Continuous Listening** - Speak naturally, auto-detects when you stop
-- **Fast Transcription** - Uses Lightning Whisper MLX optimized for Apple Silicon
-- **Multiple Output Modes**
-  - Paste + Send (Cmd+V then Enter)
-  - Paste Only (just Cmd+V)
-  - Copy Only (clipboard only)
-- **Adjustable Sensitivity** - Low/Medium/High presets for different noise levels
-- **Microphone Calibration** - Measure ambient noise and auto-set threshold
-- **Input Device Selection** - Choose which microphone to use
-- **Language Selection** - 14 languages including auto-detect
-- **Dictation Commands** - Say "period", "new line", "comma" etc.
-- **macOS Notifications** - Optional transcription notifications
-- **Hallucination Filtering** - Filters out Whisper junk from background noise
-- **Persistent Settings** - Config saved between sessions
-- **Sound Effects** - Audio feedback for state changes
-- **Transcription History** - View, copy, and export recent transcriptions
-- **Session & Lifetime Statistics** - Track words and transcriptions
-- **Launch at Login** - Optional auto-start
-- **Smart Timeouts** - Auto-reset after 30s idle, max 2min recording
+| | Voice to Claude | Whisper Flow |
+|---|---|---|
+| **Price** | Free forever | $8/mo after trial |
+| **Processing** | 100% local on-device | Cloud-based |
+| **Privacy** | Audio never leaves your Mac | Audio sent to servers |
+| **Source** | Open source (MIT) | Proprietary |
+| **Trial** | No trial — just works | 7-day trial, then paywall |
+| **Engine** | Lightning Whisper MLX | Whisper (cloud) |
 
 ## Requirements
 
 - macOS 12+ (Monterey or later)
 - Apple Silicon Mac (M1/M2/M3/M4)
 - Python 3.9+
-- Microphone access permission
-- Accessibility permission (for paste)
 
 ## Quick Start
-
-### Option 1: Automated Install
 
 ```bash
 git clone https://github.com/Wal33D/voice-to-claude.git
 cd voice-to-claude
 ./install.sh
-```
-
-Then run:
-```bash
 voice
 ```
 
-### Option 2: Manual Install
+The installer handles everything: creates a virtual environment, installs dependencies, and sets up the `voice` command.
 
-1. Install portaudio:
-   ```bash
-   brew install portaudio
-   ```
+## How It Works
 
-2. Install Python dependencies:
-   ```bash
-   pip3 install -r requirements.txt
-   ```
+Voice to Claude uses **push-to-talk** (PTT). No always-on listening, no false triggers.
 
-3. Run the app:
-   ```bash
-   python3 voice_to_claude.py
-   ```
+1. **Hold Fn (Globe)** — a floating HUD appears with green audio bars
+2. **Speak** — the bars react to your voice in real time
+3. **Release Fn** — pulsing dots appear while Whisper transcribes
+4. **Text is pasted** into the active window automatically
 
-## Usage
+The entire flow happens in under a second for short phrases.
 
-### Menu Bar Icon States
+## Menu Bar Icon States
 
 | Icon | State | Description |
 |------|-------|-------------|
-| ⏳ | Loading | Loading Whisper model |
-| 🎤 | Ready | Listening for speech |
-| 👂 | Listening | Detecting voice activity |
-| 🗣 | Speaking | Recording your speech |
+| ⏳ | Loading | Downloading/loading Whisper model |
+| 🎤 | Ready | Hold PTT key to speak |
+| 🗣 | Recording | Capturing your speech |
 | ⚙️ | Processing | Transcribing audio |
-| 📤 | Sending | Pasting to window |
-| ⏸ | Paused | Listening paused |
-| ❌ | Error | Check console for details |
+| 📤 | Sending | Pasting to active window |
+| ⏸ | Paused | PTT disabled (click to resume) |
+| ❌ | Error | Check debug log for details |
 
-### Menu Options
+## Features
 
-Click the menu bar icon to access:
-
-- **Pause/Resume** - Toggle listening on/off
-- **Sensitivity** - Adjust for room noise
-  - Low (noisy room)
-  - Medium (default)
-  - High (quiet room)
-- **Output Mode**
-  - Paste + Send - Paste and press Enter (fastest)
-  - Paste Only - Just paste, no Enter
-  - Type + Send - Type text and press Enter (for apps that block paste)
-  - Type Only - Type text character by character
-  - Copy Only - Just copy to clipboard
-- **Send Key** - Choose which key to send after text
-  - Enter (default)
-  - Ctrl+Enter (for Discord, Slack threads, etc.)
-  - Cmd+Enter
-  - Shift+Enter
-- **Whisper Model**
-  - Base (fast) - Quicker, less accurate
-  - Small (accurate) - Slower, more accurate
-- **Language** - Select transcription language
-  - Auto-detect (default)
-  - English, Spanish, French, German, Italian
-  - Portuguese, Dutch, Russian
-  - Chinese, Japanese, Korean, Arabic, Hindi
-- **Sound Effects** - Toggle audio feedback
-- **Dictation Commands** - Toggle voice command processing
-- **Auto-Capitalize** - Capitalize first letter of transcriptions
-- **Smart Punctuation** - Auto-add period, capitalize after sentences
-- **Notifications** - Toggle macOS notifications
-- **Ready Sound** - Beep when ready to listen again
-- **Recording Sound** - Beep when recording starts
-- **Pause Duration** - Adjust wait time before sending (1-3 seconds)
-- **Undo Last** - Copy original text back to clipboard
-- **Recent Transcriptions** - Click to copy, export, or clear
-- **Session Stats** - Word and transcription count
-- **Voice Conversations** - Auto-stops `say` command when you speak
+- **Push-to-Talk** — Hold Fn (Globe), Right Option, Right Command, Right Shift, or F-keys
+- **Floating HUD** — Visual feedback with audio bars, processing dots
+- **5 Output Modes** — Paste+Send, Paste Only, Type+Send, Type Only, Copy Only
+- **Configurable Send Key** — Enter, Ctrl+Enter, Cmd+Enter, Shift+Enter
+- **5 Whisper Models** — Tiny, Base, Small, Medium, Large (all local)
+- **14 Languages** — English, Spanish, French, German, and more
+- **Dictation Commands** — Say "period", "comma", "new line", etc.
+- **Smart Text Processing** — Auto-capitalize, smart punctuation, filler word removal
+- **Hallucination Filtering** — Filters Whisper junk from background noise
+- **Input Device Selection** — Choose which microphone to use
+- **Sound Effects** — Audio feedback for PTT press/release
+- **Transcription History** — View, copy, and export recent transcriptions
+- **Session & Lifetime Stats** — Track words and transcriptions
+- **Launch at Login** — Optional auto-start via launchd
+- **Append Mode** — Append to clipboard instead of replacing
 
 ## Dictation Commands
 
@@ -142,7 +90,7 @@ When enabled, you can speak these commands and they'll be replaced:
 | "colon" | : |
 | "semicolon" | ; |
 | "hyphen" | - |
-| "dash" | - |
+| "dash" | — |
 | "open quote" / "close quote" | " |
 | "open paren" / "close paren" | ( ) |
 | "ellipsis" | ... |
@@ -166,6 +114,14 @@ When enabled, you can speak these commands and they'll be replaced:
 | "slash" | / |
 | "underscore" | _ |
 | "arrow" | -> |
+| "fat arrow" | => |
+
+### Control Commands
+| Say | Action |
+|-----|--------|
+| "scratch that" / "delete that" | Undo last paste (Cmd+Z) |
+| "cancel that" / "never mind" | Discard transcription |
+| "repeat that" | Re-paste last transcription |
 
 **Example**: Say "Hello comma how are you question mark" to get "Hello, how are you?"
 
@@ -176,95 +132,82 @@ Settings are stored in `~/.config/voice-to-claude/config.json`:
 ```json
 {
   "model": "base",
-  "speech_threshold": 1500,
-  "silence_duration": 1.0,
+  "ptt_key": "fn",
   "auto_send": true,
-  "sound_effects": true
+  "sound_effects": true,
+  "dictation_commands": true,
+  "auto_capitalize": true,
+  "smart_punctuation": true,
+  "send_key": "return"
 }
 ```
 
-### Speech Threshold Guide
-
-| Environment | Recommended Threshold |
-|-------------|----------------------|
-| Quiet room | 800 |
-| Normal room | 1500 |
-| Noisy room | 2500 |
-
-## Launch at Login
-
-To start Voice to Claude automatically when you log in:
-
-```bash
-./autostart.sh enable
-```
-
-To disable:
-```bash
-./autostart.sh disable
-```
-
-Check status:
-```bash
-./autostart.sh status
-```
+All settings can be changed from the menu bar — no need to edit the file directly.
 
 ## Troubleshooting
 
-### "Stuck on Speaking"
-Your background noise is triggering false speech detection.
-- Click the menu bar icon
-- Go to **Sensitivity**
-- Select **Low (noisy room)**
+### Accessibility permission
+The app needs Accessibility access to simulate Cmd+V paste and to detect the Fn key.
 
-### Transcriptions contain junk like "1.1.1.1..."
-This is Whisper hallucination from ambient noise.
-- The app filters most of this automatically
-- Try lowering sensitivity if it persists
-- Speak closer to the microphone
+**System Settings → Privacy & Security → Accessibility → Add your terminal app**
 
-### No microphone access
-1. Open **System Preferences** > **Privacy & Security** > **Microphone**
-2. Enable access for Terminal (or Python)
+If you see "Could not create event tap for Fn key" in the debug log, this permission is missing.
 
-### Paste not working
-1. Open **System Preferences** > **Privacy & Security** > **Accessibility**
-2. Enable access for Terminal (or Python)
+### Fn key not working
+- Make sure Accessibility permission is granted (see above)
+- If your Fn key is mapped to emoji picker, go to **System Settings → Keyboard** and set "Press fn key to" → "Do Nothing" or "Change Input Source"
+- Try a different PTT key from the menu (e.g., Right Option)
 
-### Model takes too long to load
-- The first run downloads the model (~150MB for base)
-- Subsequent runs use the cached model
-- Try the "Base" model for faster loading
-
-## Project Structure
-
+### pyobjc import errors
+If the HUD or Fn key detection doesn't work:
+```bash
+# Reinstall from scratch
+rm -rf venv && ./install.sh
 ```
-voice-to-claude/
-├── voice_to_claude.py   # Main application
-├── requirements.txt     # Python dependencies
-├── install.sh           # Installation script
-├── autostart.sh         # Launch at login script
-├── com.voicetoclaude.plist  # LaunchAgent template
-├── README.md            # This file
-└── LICENSE              # MIT License
+The `pyobjc-framework-Cocoa` and `pyobjc-framework-Quartz` packages must be installed — `install.sh` handles this automatically.
+
+### First-run model download
+The first time you launch, Whisper downloads the model (~150 MB for base). This is a one-time download — subsequent launches are instant. The loading icon (⏳) will show until it's ready.
+
+### Debug mode
+To see detailed logs:
+```bash
+voice --debug
 ```
+Or set the environment variable:
+```bash
+VTC_DEBUG=1 voice
+```
+Logs are written to `~/.config/voice-to-claude/debug.log`.
 
-## Tech Stack
+### Microphone not detected
+1. **System Settings → Privacy & Security → Microphone** → enable for your terminal
+2. Use the **Test Microphone** option in the menu bar to verify levels
+3. Try selecting a specific input device from the **Input Device** menu
 
-- **[rumps](https://github.com/jaredks/rumps)** - macOS menu bar framework
-- **[Lightning Whisper MLX](https://github.com/mustafaaljadery/lightning-whisper-mlx)** - 10x faster Whisper for Apple Silicon
-- **[PyAudio](https://people.csail.mit.edu/pyaudio/)** - Audio input
-- **[pyperclip](https://github.com/asweigart/pyperclip)** - Clipboard access
+## Launch at Login
 
-## Contributing
-
-Contributions welcome! Please open an issue or PR.
-
-## License
-
-MIT License - See [LICENSE](LICENSE) for details.
+```bash
+./autostart.sh enable    # Enable auto-start
+./autostart.sh disable   # Disable auto-start
+./autostart.sh status    # Check status
+```
 
 ## Changelog
+
+### v2.0.0
+- **Push-to-Talk** — Complete rewrite from continuous listening to PTT mode
+- **Floating HUD** — Native macOS overlay with audio bars and processing animation
+- **Fn (Globe) key support** — Quartz-based modifier flag detection
+- **Multiple PTT keys** — Fn, Right Option, Right Command, Right Shift, F17-F19
+- **Smart text processing** — Filler word removal, auto-capitalize, smart punctuation
+- **Text corrections** — Automatic contraction fixes (dont → don't, im → I'm)
+- **Control commands** — "scratch that", "cancel that", "repeat that"
+- **Type output modes** — Type+Send and Type Only for paste-blocking apps
+- **Append mode** — Append to clipboard instead of replacing
+- **Venv-based install** — Clean isolated environment, no system Python conflicts
+- **Debug logging opt-in** — No log file created unless `--debug` or `VTC_DEBUG=1`
+- **Launcher script** — `./voice` activates venv automatically
 
 ### v1.8.1
 - Improved hallucination filtering (fixed false positives for valid sentences)
@@ -277,71 +220,50 @@ MIT License - See [LICENSE](LICENSE) for details.
 ### v1.8.0
 - Added comprehensive filler word removal (like Wispr Flow)
 - Added more text corrections for contractions
-- Added double word removal (the the -> the)
+- Added double word removal (the the → the)
 - Added more hallucination patterns (timestamps, music symbols)
 - Improved sentence capitalization
 
 ### v1.7.0
 - Added 5 Whisper model options (tiny, base, small, medium, large-v3)
-- Improved model selection menu
-- Better error handling
 
 ### v1.6.1
-- Added recording sound option (beep when recording starts)
-- Better callback system for audio events
+- Added recording sound option
 
 ### v1.6.0
 - Added smart punctuation (auto-period, capitalize after sentences)
-- Added text corrections (i -> I, i'm -> I'm, etc.)
+- Added text corrections (i → I, i'm → I'm, etc.)
 - Added "Undo Last" to copy original text back to clipboard
 
 ### v1.5.0
-- Added pause duration control (1-3 seconds)
-- Auto-stops `say` command when user starts speaking (for voice conversations)
-- Code cleanup and proper import organization
+- Added pause duration control
+- Auto-stops `say` command when user starts speaking
 
 ### v1.4.1
-- Improved hallucination filtering (catches numbers, percentages)
-- Raised default speech threshold to reduce false triggers
-- Added "Very Low" sensitivity for very noisy environments
+- Improved hallucination filtering
+- Raised default speech threshold
 
 ### v1.4.0
-- Added auto-capitalize option (first letter of transcriptions)
-- Added ready sound option (beep when ready to listen again)
-- Added customizable send key (Enter, Ctrl+Enter, Cmd+Enter, Shift+Enter)
-- Added microphone test with live audio level visualization
-- Added quick help dialog
+- Added auto-capitalize, ready sound, customizable send key
+- Added microphone test, quick help dialog
 
 ### v1.3.0
-- Added dictation commands (period, comma, new line, etc.)
-- Added macOS notifications toggle
-- Added export transcription history to file
-- Added clear transcription history option
-- Improved menu organization
+- Added dictation commands, notifications, export history
 
 ### v1.2.0
-- Added microphone calibration tool
-- Added input device selection
-- Added recording timeouts (30s listen, 2min max record)
-- Added About dialog with lifetime stats
-- Added CONTRIBUTING.md
+- Added microphone calibration, input device selection, recording timeouts
+- Added About dialog, CONTRIBUTING.md
 
 ### v1.1.0
-- Added persistent configuration
-- Added output mode selection (paste+send, paste only, copy only)
-- Added sound effects with toggle
-- Added transcription history
-- Added session statistics
-- Added Whisper model selection
-- Added launch at login support
-- Improved hallucination filtering
-- Added installation script
+- Added persistent config, output modes, sound effects, transcription history
+- Added session stats, model selection, launch at login, install script
 
 ### v1.0.0
 - Initial release
-- Basic voice-to-text with menu bar UI
-- Adjustable sensitivity
-- Auto-paste and send
+
+## License
+
+MIT License — See [LICENSE](LICENSE) for details.
 
 ---
 

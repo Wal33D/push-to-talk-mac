@@ -3,3 +3,5 @@ pyperclip>=1.8.0
 rumps>=0.4.0
 lightning-whisper-mlx>=0.0.10
 pynput>=1.7.6
+pyobjc-framework-Cocoa>=9.0
+pyobjc-framework-Quartz>=9.0

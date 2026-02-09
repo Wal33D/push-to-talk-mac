@@ -1,49 +1,102 @@
 #!/bin/bash
 #
-# Voice to Claude - Installation Script
+# Voice to Claude v2.0 — Installation Script
 #
-# This script installs all dependencies and sets up the app.
+# Creates a virtual environment, installs all dependencies,
+# and sets up the `voice` command.
 #
 
 set -e
 
 echo "========================================"
-echo "  Voice to Claude - Installation"
+echo "  Voice to Claude v2.0 — Installer"
 echo "========================================"
 echo
 
-# Check for Homebrew
-if ! command -v brew &> /dev/null; then
-    echo "Installing Homebrew..."
-    /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+
+# ── 1. Check Apple Silicon ────────────────────────────────────────────────
+ARCH="$(uname -m)"
+if [ "$ARCH" != "arm64" ]; then
+    echo "ERROR: Voice to Claude requires Apple Silicon (M1/M2/M3/M4)."
+    echo "       Detected architecture: $ARCH"
+    exit 1
+fi
+echo "✓ Apple Silicon detected ($ARCH)"
+
+# ── 2. Check Python 3.9+ ─────────────────────────────────────────────────
+if ! command -v python3 &> /dev/null; then
+    echo "ERROR: Python 3 not found. Install from https://python.org"
+    exit 1
 fi
 
-# Install portaudio (required for pyaudio)
-echo "Installing portaudio..."
-brew install portaudio 2>/dev/null || true
+PY_VERSION="$(python3 -c 'import sys; print(f"{sys.version_info.major}.{sys.version_info.minor}")')"
+PY_MAJOR="$(echo "$PY_VERSION" | cut -d. -f1)"
+PY_MINOR="$(echo "$PY_VERSION" | cut -d. -f2)"
 
-# Install Python dependencies
-echo "Installing Python dependencies..."
-pip3 install --user -r requirements.txt
+if [ "$PY_MAJOR" -lt 3 ] || { [ "$PY_MAJOR" -eq 3 ] && [ "$PY_MINOR" -lt 9 ]; }; then
+    echo "ERROR: Python 3.9+ required. Found Python $PY_VERSION"
+    exit 1
+fi
+echo "✓ Python $PY_VERSION"
 
-# Add alias to shell config
+# ── 3. Check / install Homebrew ───────────────────────────────────────────
+if ! command -v brew &> /dev/null; then
+    echo "Homebrew not found. Installing..."
+    /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"
+    # Add brew to PATH for this session
+    eval "$(/opt/homebrew/bin/brew shellenv)"
+fi
+echo "✓ Homebrew"
+
+# ── 4. Install portaudio (required by PyAudio) ───────────────────────────
+if ! brew list portaudio &> /dev/null; then
+    echo "Installing portaudio..."
+    brew install portaudio
+else
+    echo "✓ portaudio already installed"
+fi
+
+# ── 5. Create virtual environment ────────────────────────────────────────
+VENV="$SCRIPT_DIR/venv"
+if [ -d "$VENV" ]; then
+    echo "Removing existing virtual environment..."
+    rm -rf "$VENV"
+fi
+echo "Creating virtual environment..."
+python3 -m venv "$VENV"
+echo "✓ Virtual environment created at ./venv/"
+
+# ── 6. Install Python dependencies ───────────────────────────────────────
+echo "Installing Python dependencies (this may take a minute)..."
+"$VENV/bin/pip" install --upgrade pip > /dev/null
+"$VENV/bin/pip" install -r "$SCRIPT_DIR/requirements.txt"
+echo "✓ Dependencies installed"
+
+# ── 7. Make launcher executable ──────────────────────────────────────────
+chmod +x "$SCRIPT_DIR/voice"
+echo "✓ Launcher script ready"
+
+# ── 8. Add voice alias to shell config ───────────────────────────────────
 SHELL_RC="$HOME/.zshrc"
 if [[ "$SHELL" == *"bash"* ]]; then
     SHELL_RC="$HOME/.bashrc"
 fi
 
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-ALIAS_LINE="alias voice=\"python3 ${SCRIPT_DIR}/voice_to_claude.py\""
+ALIAS_LINE="alias voice=\"$SCRIPT_DIR/voice\""
 
 if ! grep -q "alias voice=" "$SHELL_RC" 2>/dev/null; then
     echo "" >> "$SHELL_RC"
     echo "# Voice to Claude" >> "$SHELL_RC"
     echo "$ALIAS_LINE" >> "$SHELL_RC"
-    echo "Added 'voice' alias to $SHELL_RC"
+    echo "✓ Added 'voice' alias to $SHELL_RC"
 else
-    echo "'voice' alias already exists in $SHELL_RC"
+    # Update existing alias to point to new launcher
+    sed -i '' "s|alias voice=.*|$ALIAS_LINE|" "$SHELL_RC"
+    echo "✓ Updated 'voice' alias in $SHELL_RC"
 fi
 
+# ── Done ──────────────────────────────────────────────────────────────────
 echo
 echo "========================================"
 echo "  Installation Complete!"
@@ -52,10 +105,18 @@ echo
 echo "To start Voice to Claude:"
 echo "  1. Open a new terminal (or run: source $SHELL_RC)"
 echo "  2. Run: voice"
+echo "  3. Or run directly: $SCRIPT_DIR/voice"
 echo
-echo "The app will appear in your menu bar."
+echo "Debug mode:"
+echo "  voice --debug"
+echo "  (logs written to ~/.config/voice-to-claude/debug.log)"
 echo
-echo "On first run, macOS will ask for:"
-echo "  - Microphone access"
-echo "  - Accessibility access (for paste)"
+echo "IMPORTANT — macOS permissions required:"
+echo "  System Settings → Privacy & Security → Accessibility"
+echo "    → Add Terminal (or your terminal app)"
+echo "  System Settings → Privacy & Security → Microphone"
+echo "    → Enable for Terminal (or your terminal app)"
+echo
+echo "On first run, the Whisper model (~150 MB) will be downloaded."
+echo "Subsequent launches are instant."
 echo

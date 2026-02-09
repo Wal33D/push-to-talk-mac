@@ -6,8 +6,8 @@
     <string>com.voicetoclaude</string>
     <key>ProgramArguments</key>
     <array>
-        <string>/usr/bin/python3</string>
-        <string>voice_to_claude.py</string>
+        <string>INSTALL_PATH/venv/bin/python3</string>
+        <string>INSTALL_PATH/voice_to_claude.py</string>
     </array>
     <key>WorkingDirectory</key>
     <string>INSTALL_PATH</string>

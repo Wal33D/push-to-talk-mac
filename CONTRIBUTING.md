@@ -7,7 +7,7 @@ Thank you for your interest in contributing! Here's how you can help.
 - Check existing issues first
 - Include your macOS version
 - Include Python version (`python3 --version`)
-- Include any error messages from Terminal
+- Include any error messages from the debug log (`voice --debug`)
 
 ## Feature Requests
 
@@ -34,10 +34,12 @@ Thank you for your interest in contributing! Here's how you can help.
 ### Testing
 
 Before submitting:
-1. Run the app and test all menu options
-2. Test with different sensitivity settings
-3. Test pause/resume
-4. Verify transcription quality
+1. Run `rm -rf venv && ./install.sh` to verify clean install
+2. Run `voice` and test all menu options
+3. Test PTT with Fn key and at least one other key
+4. Test pause/resume
+5. Test `voice --debug` and verify log output
+6. Verify `./autostart.sh enable && ./autostart.sh status`
 
 ## Development Setup
 
@@ -46,23 +48,24 @@ Before submitting:
 git clone https://github.com/YOUR_USERNAME/voice-to-claude.git
 cd voice-to-claude
 
-# Install dependencies
-pip3 install -r requirements.txt
+# Install into a virtual environment
+./install.sh
 
-# Run in development
-python3 voice_to_claude.py
+# Run in development (with debug logging)
+./voice --debug
+
+# Or manually activate venv
+source venv/bin/activate
+python3 voice_to_claude.py --debug
 ```
 
 ## Ideas for Contributions
 
-- [ ] Add more Whisper model options (tiny, medium, large)
-- [ ] Add language selection
-- [ ] Add global keyboard shortcut
-- [ ] Add notification support
-- [ ] Create a native macOS app bundle
-- [ ] Add waveform visualization
-- [ ] Add audio input device selection
-- [ ] Add export transcription history
+- [ ] Native macOS .app bundle (py2app or Platypus)
+- [ ] Custom wake word as alternative to PTT
+- [ ] Per-app output mode profiles (auto-switch based on frontmost app)
+- [ ] Whisper model auto-download progress bar in HUD
+- [ ] Multi-monitor HUD positioning
 
 ## Questions?
 

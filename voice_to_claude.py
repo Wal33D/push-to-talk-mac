@@ -2,8 +2,8 @@
 """
 Voice to Claude - macOS Menu Bar App
 
-A voice-to-text tool that lives in your menu bar, continuously listens for speech,
-transcribes using Whisper, and auto-pastes to the active window.
+A push-to-talk voice-to-text tool that lives in your menu bar.
+Hold Fn (Globe) to speak, release to transcribe and paste.
 
 Perfect for hands-free dictation to Claude Code or any text input.
 
@@ -23,11 +23,25 @@ import re
 import threading
 import tempfile
 import wave
-import time
 import subprocess
 import array
+import logging
 from pathlib import Path
 from datetime import datetime
+
+# Debug logging — opt-in via --debug flag or VTC_DEBUG=1 env var
+_DEBUG = ("--debug" in sys.argv) or (os.environ.get("VTC_DEBUG") == "1")
+if "--debug" in sys.argv:
+    sys.argv.remove("--debug")
+_LOG_PATH = Path.home() / ".config" / "voice-to-claude" / "debug.log"
+_LOG_PATH.parent.mkdir(parents=True, exist_ok=True)
+logging.basicConfig(
+    filename=str(_LOG_PATH) if _DEBUG else os.devnull,
+    level=logging.DEBUG if _DEBUG else logging.WARNING,
+    format="%(asctime)s [%(levelname)s] %(message)s",
+    datefmt="%H:%M:%S",
+)
+log = logging.getLogger("vtc")
 
 # Set working directory for model cache
 os.chdir(os.path.expanduser("~"))
@@ -50,7 +64,27 @@ try:
 except ImportError:
     HAS_QUARTZ = False
 
-__version__ = "1.9.1"
+# AppKit for floating HUD widget
+try:
+    import math
+    import objc
+    from Foundation import NSObject, NSTimer, NSMakeRect, NSMakePoint, NSNumber, NSDictionary
+    from AppKit import (
+        NSPanel, NSView, NSScreen, NSColor, NSFont, NSBezierPath,
+        NSBackingStoreBuffered, NSFloatingWindowLevel,
+        NSWindowStyleMaskBorderless,
+        NSWindowCollectionBehaviorCanJoinAllSpaces,
+        NSWindowCollectionBehaviorStationary,
+        NSWindowCollectionBehaviorFullScreenAuxiliary,
+        NSFontAttributeName, NSForegroundColorAttributeName,
+        NSMutableParagraphStyle, NSParagraphStyleAttributeName,
+        NSTextAlignmentCenter, NSString, NSMakeSize,
+    )
+    HAS_APPKIT = True
+except ImportError:
+    HAS_APPKIT = False
+
+__version__ = "2.0.0"
 __author__ = "Waleed Judah"
 
 # ============================================================================
@@ -69,12 +103,6 @@ DEFAULT_CONFIG = {
     "chunk": 1024,
     "channels": 1,
 
-    # Voice detection
-    "silence_threshold": 800,
-    "speech_threshold": 2000,  # Raised from 1500 to reduce false triggers
-    "silence_duration": 2.5,  # Seconds of silence before sending
-    "min_speech_duration": 0.3,
-
     # Behavior
     "auto_send": True,
     "sound_effects": True,
@@ -89,13 +117,10 @@ DEFAULT_CONFIG = {
 
     # Advanced
     "send_key": "return",  # Options: return, ctrl_return, cmd_return
-    "ready_sound": False,  # Play sound when ready to listen again
-    "recording_sound": False,  # Play sound when recording starts
     "append_mode": False,  # Append to clipboard instead of replacing
     "custom_replacements": {},  # User-defined text replacements
 
-    # Push-to-Talk
-    "ptt_mode": False,  # False = continuous listening, True = push-to-talk
+    # Push-to-Talk key
     "ptt_key": "fn",  # Key to hold for PTT
 }
 
@@ -132,7 +157,6 @@ CONFIG = load_config()
 class State:
     LOADING = "loading"
     READY = "ready"
-    LISTENING = "listening"
     SPEAKING = "speaking"
     PROCESSING = "processing"
     SENDING = "sending"
@@ -142,7 +166,6 @@ class State:
 STATE_ICONS = {
     State.LOADING:    "⏳",
     State.READY:      "🎤",
-    State.LISTENING:  "👂",
     State.SPEAKING:   "🗣",
     State.PROCESSING: "⚙️",
     State.SENDING:    "📤",
@@ -152,8 +175,7 @@ STATE_ICONS = {
 
 STATE_DESCRIPTIONS = {
     State.LOADING:    "Loading Whisper model...",
-    State.READY:      "Ready - speak to dictate",
-    State.LISTENING:  "Listening for speech...",
+    State.READY:      "PTT Ready — Hold Fn to speak",
     State.SPEAKING:   "Recording your speech...",
     State.PROCESSING: "Transcribing audio...",
     State.SENDING:    "Pasting to active window...",
@@ -162,18 +184,313 @@ STATE_DESCRIPTIONS = {
 }
 
 # ============================================================================
+# FLOATING HUD WIDGET
+# ============================================================================
+
+if HAS_APPKIT:
+
+    class HUDBarView(NSView):
+        """Custom NSView that draws the floating HUD pill with three states."""
+
+        def initWithFrame_(self, frame):
+            self = objc.super(HUDBarView, self).initWithFrame_(frame)
+            if self is None:
+                return None
+            self._state = "idle"       # idle / recording / processing
+            self._audio_levels = [0.0] * 12
+            self._label_text = "Hold Fn (Globe) to speak"
+            self._tick = 0
+            return self
+
+        def isFlipped(self):
+            return False
+
+        def drawRect_(self, rect):
+            bounds = self.bounds()
+            w = bounds.size.width
+            h = bounds.size.height
+
+            # Draw pill background
+            pill = NSBezierPath.bezierPathWithRoundedRect_xRadius_yRadius_(
+                bounds, h / 2.0, h / 2.0
+            )
+            NSColor.colorWithCalibratedRed_green_blue_alpha_(0.1, 0.1, 0.1, 0.85).setFill()
+            pill.fill()
+
+            if self._state == "recording":
+                self._draw_audio_bars(w, h)
+            elif self._state == "processing":
+                self._draw_processing_dots(w, h)
+            else:
+                self._draw_label(w, h)
+
+        def _draw_label(self, w, h):
+            """Draw centered white text for idle state."""
+            text = NSString.stringWithString_(self._label_text)
+            style = NSMutableParagraphStyle.alloc().init()
+            style.setAlignment_(NSTextAlignmentCenter)
+            attrs = {
+                NSFontAttributeName: NSFont.systemFontOfSize_(13.0),
+                NSForegroundColorAttributeName: NSColor.whiteColor(),
+                NSParagraphStyleAttributeName: style,
+            }
+            text_size = text.sizeWithAttributes_(attrs)
+            y = (h - text_size.height) / 2.0
+            text_rect = NSMakeRect(0, y, w, text_size.height)
+            text.drawInRect_withAttributes_(text_rect, attrs)
+
+        def _draw_audio_bars(self, w, h):
+            """Draw 12 vertical audio bars that respond to mic levels."""
+            num_bars = 12
+            bar_width = 4.0
+            bar_gap = 3.0
+            total_bar_width = num_bars * bar_width + (num_bars - 1) * bar_gap
+            start_x = (w - total_bar_width) / 2.0
+            min_bar_h = 4.0
+            max_bar_h = h - 10.0
+
+            NSColor.colorWithCalibratedRed_green_blue_alpha_(0.3, 0.85, 0.4, 1.0).setFill()
+
+            for i in range(num_bars):
+                level = self._audio_levels[i] if i < len(self._audio_levels) else 0.0
+                bar_h = min_bar_h + level * (max_bar_h - min_bar_h)
+                x = start_x + i * (bar_width + bar_gap)
+                y = (h - bar_h) / 2.0
+                bar_rect = NSMakeRect(x, y, bar_width, bar_h)
+                bar_path = NSBezierPath.bezierPathWithRoundedRect_xRadius_yRadius_(
+                    bar_rect, bar_width / 2.0, bar_width / 2.0
+                )
+                bar_path.fill()
+
+        def _draw_processing_dots(self, w, h):
+            """Draw 3 pulsing dots for processing state."""
+            num_dots = 3
+            dot_radius = 4.0
+            dot_gap = 12.0
+            total_w = num_dots * dot_radius * 2 + (num_dots - 1) * dot_gap
+            start_x = (w - total_w) / 2.0
+
+            for i in range(num_dots):
+                # Sine-wave alpha pulsing, staggered per dot
+                phase = self._tick * 0.15 + i * 1.2
+                alpha = 0.4 + 0.6 * (0.5 + 0.5 * math.sin(phase))
+                NSColor.colorWithCalibratedRed_green_blue_alpha_(1.0, 1.0, 1.0, alpha).setFill()
+                cx = start_x + dot_radius + i * (dot_radius * 2 + dot_gap)
+                cy = h / 2.0
+                dot_rect = NSMakeRect(cx - dot_radius, cy - dot_radius,
+                                      dot_radius * 2, dot_radius * 2)
+                dot_path = NSBezierPath.bezierPathWithOvalInRect_(dot_rect)
+                dot_path.fill()
+
+        def setAudioLevels_(self, levels):
+            self._audio_levels = list(levels)
+            self.setNeedsDisplay_(True)
+
+        def setState_label_(self, state, label):
+            self._state = state
+            self._label_text = label
+            self.setNeedsDisplay_(True)
+
+        def animationTick(self):
+            self._tick += 1
+            self.setNeedsDisplay_(True)
+
+
+    class HUDUpdater(NSObject):
+        """Main-thread bridge for updating the HUD from background threads."""
+
+        def init(self):
+            self = objc.super(HUDUpdater, self).init()
+            if self is None:
+                return None
+            self._panel = None
+            self._view = None
+            self._timer = None
+            self._level_buffer = [0.0] * 12
+            return self
+
+        def createAndShow(self):
+            """Create the NSPanel + HUDBarView and show it. Must be called on main thread."""
+            screen = NSScreen.mainScreen()
+            if screen is None:
+                return
+            screen_frame = screen.frame()
+            hud_w = 300.0
+            hud_h = 40.0
+            bottom_margin = 60.0
+            x = (screen_frame.size.width - hud_w) / 2.0
+            y = bottom_margin
+
+            panel = NSPanel.alloc().initWithContentRect_styleMask_backing_defer_(
+                NSMakeRect(x, y, hud_w, hud_h),
+                NSWindowStyleMaskBorderless,
+                NSBackingStoreBuffered,
+                False,
+            )
+            panel.setLevel_(NSFloatingWindowLevel + 1)
+            panel.setOpaque_(False)
+            panel.setBackgroundColor_(NSColor.clearColor())
+            panel.setIgnoresMouseEvents_(True)
+            panel.setHidesOnDeactivate_(False)
+            panel.setCollectionBehavior_(
+                NSWindowCollectionBehaviorCanJoinAllSpaces
+                | NSWindowCollectionBehaviorStationary
+                | NSWindowCollectionBehaviorFullScreenAuxiliary
+            )
+
+            view = HUDBarView.alloc().initWithFrame_(NSMakeRect(0, 0, hud_w, hud_h))
+            panel.setContentView_(view)
+            panel.orderFront_(None)
+
+            self._panel = panel
+            self._view = view
+
+        def updateLevel_(self, ns_number):
+            """Receives an NSNumber with a float level, shifts into rolling buffer."""
+            if self._view is None:
+                return
+            level = ns_number.floatValue()
+            self._level_buffer.pop(0)
+            self._level_buffer.append(level)
+            self._view.setAudioLevels_(self._level_buffer)
+
+        def setState_(self, ns_dict):
+            """Receives NSDictionary with 'state' and 'label' keys."""
+            if self._view is None:
+                return
+            state = str(ns_dict["state"])
+            label = str(ns_dict["label"])
+            self._view.setState_label_(state, label)
+
+            # Manage processing animation timer
+            if state == "processing":
+                self._start_animation_timer()
+            else:
+                self._stop_animation_timer()
+
+        def _start_animation_timer(self):
+            if self._timer is not None:
+                return
+            self._timer = NSTimer.scheduledTimerWithTimeInterval_target_selector_userInfo_repeats_(
+                1.0 / 12.0,  # 12 fps
+                self,
+                objc.selector(self.animationTick_, signature=b'v@:@'),
+                None,
+                True,
+            )
+
+        def _stop_animation_timer(self):
+            if self._timer is not None:
+                self._timer.invalidate()
+                self._timer = None
+
+        def animationTick_(self, timer):
+            if self._view is not None:
+                self._view.animationTick()
+
+        def showPanel(self):
+            if self._panel is not None:
+                self._panel.orderFront_(None)
+
+        def hidePanel(self):
+            if self._panel is not None:
+                self._panel.orderOut_(None)
+
+
+class FloatingHUD:
+    """Python wrapper around the AppKit HUD panel.
+
+    All AppKit calls are dispatched to the main thread via
+    performSelectorOnMainThread to ensure thread safety.
+    """
+
+    HUD_WIDTH = 300
+    HUD_HEIGHT = 40
+    BOTTOM_MARGIN = 60
+    NUM_BARS = 12
+
+    def __init__(self):
+        self._updater = None
+        self._enabled = HAS_APPKIT
+        if self._enabled:
+            self._updater = HUDUpdater.alloc().init()
+
+    def create_and_show(self):
+        if not self._enabled or self._updater is None:
+            return
+        self._updater.performSelectorOnMainThread_withObject_waitUntilDone_(
+            'createAndShow', None, False
+        )
+
+    def set_idle(self, key_display="Fn (Globe)"):
+        if not self._enabled or self._updater is None:
+            return
+        info = NSDictionary.dictionaryWithDictionary_({
+            "state": "idle",
+            "label": f"Hold {key_display} to speak",
+        })
+        self._updater.performSelectorOnMainThread_withObject_waitUntilDone_(
+            'setState:', info, False
+        )
+
+    def set_recording(self):
+        if not self._enabled or self._updater is None:
+            return
+        info = NSDictionary.dictionaryWithDictionary_({
+            "state": "recording",
+            "label": "Recording...",
+        })
+        self._updater.performSelectorOnMainThread_withObject_waitUntilDone_(
+            'setState:', info, False
+        )
+
+    def set_processing(self):
+        if not self._enabled or self._updater is None:
+            return
+        info = NSDictionary.dictionaryWithDictionary_({
+            "state": "processing",
+            "label": "Processing...",
+        })
+        self._updater.performSelectorOnMainThread_withObject_waitUntilDone_(
+            'setState:', info, False
+        )
+
+    def update_audio_level(self, raw_level):
+        """Normalize raw audio level (0-32768) to 0.0-1.0 and send to main thread."""
+        if not self._enabled or self._updater is None:
+            return
+        normalized = min(1.0, max(0.0, raw_level / 32768.0))
+        ns_num = NSNumber.numberWithFloat_(normalized)
+        self._updater.performSelectorOnMainThread_withObject_waitUntilDone_(
+            'updateLevel:', ns_num, False
+        )
+
+    def show(self):
+        if not self._enabled or self._updater is None:
+            return
+        self._updater.performSelectorOnMainThread_withObject_waitUntilDone_(
+            'showPanel', None, False
+        )
+
+    def hide(self):
+        if not self._enabled or self._updater is None:
+            return
+        self._updater.performSelectorOnMainThread_withObject_waitUntilDone_(
+            'hidePanel', None, False
+        )
+
+
+# ============================================================================
 # AUDIO ENGINE
 # ============================================================================
 
 class AudioEngine:
-    """Handles microphone input and voice activity detection."""
+    """Handles microphone input for push-to-talk recording."""
 
-    def __init__(self, config, state_callback, recording_callback=None):
+    def __init__(self, config, state_callback):
         self.config = config
         self.state_callback = state_callback
-        self.recording_callback = recording_callback  # Called when recording starts
         self.running = False
-        self.paused = False
         self.device_index = config.get("input_device", None)
 
     @staticmethod
@@ -202,110 +519,7 @@ class AudioEngine:
         audio_data = array.array('h', data)
         return max(abs(sample) for sample in audio_data) if audio_data else 0
 
-    def record_until_silence(self):
-        """Record audio until speech is detected, then stop after silence."""
-        p = pyaudio.PyAudio()
-
-        try:
-            stream_kwargs = {
-                'format': pyaudio.paInt16,
-                'channels': self.config["channels"],
-                'rate': self.config["rate"],
-                'input': True,
-                'frames_per_buffer': self.config["chunk"],
-            }
-            if self.device_index is not None:
-                stream_kwargs['input_device_index'] = self.device_index
-
-            stream = p.open(**stream_kwargs)
-        except Exception as e:
-            print(f"Failed to open audio stream: {e}")
-            self.state_callback(State.ERROR)
-            return None
-
-        frames = []
-        silent_chunks = 0
-        speech_chunks = 0
-        has_speech = False
-        total_chunks = 0
-
-        rate = self.config["rate"]
-        chunk = self.config["chunk"]
-        speech_threshold = self.config["speech_threshold"]
-        silence_duration = self.config["silence_duration"]
-        min_speech_duration = self.config["min_speech_duration"]
-
-        chunks_for_silence = int(silence_duration * rate / chunk)
-        chunks_for_min_speech = int(min_speech_duration * rate / chunk)
-        max_listen_chunks = int(30 * rate / chunk)  # 30 second timeout
-        max_record_chunks = int(120 * rate / chunk)  # 2 minute max recording
-
-        self.state_callback(State.LISTENING)
-
-        try:
-            while self.running and not self.paused:
-                try:
-                    data = stream.read(chunk, exception_on_overflow=False)
-                except Exception:
-                    continue
-
-                frames.append(data)
-                level = self.get_audio_level(data)
-                total_chunks += 1
-
-                # Timeout: if listening for too long with no speech, reset
-                if not has_speech and total_chunks > max_listen_chunks:
-                    break
-
-                # Timeout: if recording for too long, stop
-                if has_speech and total_chunks > max_record_chunks:
-                    break
-
-                if level > speech_threshold:
-                    speech_chunks += 1
-                    silent_chunks = 0
-
-                    if speech_chunks >= chunks_for_min_speech and not has_speech:
-                        has_speech = True
-                        # Stop any TTS (say command) when user starts speaking
-                        OutputHandler.stop_speaking()
-                        # Notify that recording started
-                        if self.recording_callback:
-                            self.recording_callback()
-                        self.state_callback(State.SPEAKING)
-                else:
-                    if has_speech:
-                        silent_chunks += 1
-                        if silent_chunks >= chunks_for_silence:
-                            break
-
-        except Exception as e:
-            print(f"Recording error: {e}")
-            self.state_callback(State.ERROR)
-            return None
-        finally:
-            stream.stop_stream()
-            stream.close()
-            p.terminate()
-
-        if not has_speech:
-            return None
-
-        # Save to temp file
-        try:
-            with tempfile.NamedTemporaryFile(suffix='.wav', delete=False) as f:
-                wf = wave.open(f.name, 'wb')
-                wf.setnchannels(self.config["channels"])
-                wf.setsampwidth(2)
-                wf.setframerate(self.config["rate"])
-                wf.writeframes(b''.join(frames))
-                wf.close()
-                return f.name
-        except Exception as e:
-            print(f"Failed to save audio: {e}")
-            return None
-
-    def record_until_released(self, stop_event):
+    def record_until_released(self, stop_event, level_callback=None):
         """Record audio until stop_event is set (key released). For PTT mode."""
         p = pyaudio.PyAudio()
 
@@ -345,6 +559,9 @@ class AudioEngine:
                     continue
                 frames.append(data)
                 total_chunks += 1
+
+                if level_callback is not None:
+                    level_callback(self.get_audio_level(data))
 
                 # Don't check stop_event until we've recorded the minimum
                 if total_chunks < min_record_chunks:
@@ -631,16 +848,19 @@ class TranscriptionEngine:
                 kwargs['language'] = self.language
             result = self.whisper.transcribe(audio_file, **kwargs)
             text = result.get("text", "").strip()
+            log.info(f"Raw whisper output: {repr(text)}")
 
             if not text or len(text) < 3:
+                log.warning(f"Text too short, discarding: {repr(text)}")
                 return None
 
             if self._is_hallucination(text):
+                log.warning(f"HALLUCINATION FILTER dropped: {repr(text)}")
                 return None
 
             return text
         except Exception as e:
-            print(f"Transcription error: {e}")
+            log.error(f"Transcription error: {e}", exc_info=True)
             return None
 
     def _is_hallucination(self, text):
@@ -718,17 +938,20 @@ class TranscriptionEngine:
             if text_lower.startswith(start):
                 return True
 
-        # Check for repeated patterns (whole words only for short patterns)
-        for pattern in junk_patterns:
-            if len(pattern) <= 3:
-                # For short patterns, use word boundary matching
-                word_count = len(re.findall(r'\b' + re.escape(pattern) + r'\b', text_lower, re.IGNORECASE))
-                if word_count > 2:
-                    return True
-            else:
-                # For longer patterns, substring matching is fine
-                if text.count(pattern) > 2 or text_lower.count(pattern.lower()) > 2:
-                    return True
+        # Check for repeated patterns — but ONLY in short text (< 8 words).
+        # In longer text, common words like "to", "you", "the" naturally repeat.
+        words = text.split()
+        if len(words) <= 8:
+            for pattern in junk_patterns:
+                if len(pattern) <= 3:
+                    word_count = len(re.findall(r'\b' + re.escape(pattern) + r'\b', text_lower, re.IGNORECASE))
+                    if word_count > 2:
+                        log.debug(f"Hallucination: short pattern '{pattern}' repeated {word_count}x in short text")
+                        return True
+                else:
+                    if text.count(pattern) > 2 or text_lower.count(pattern.lower()) > 2:
+                        log.debug(f"Hallucination: long pattern '{pattern}' repeated >2x")
+                        return True
 
         # Check if mostly non-alphanumeric
         alpha_count = sum(1 for c in text if c.isalpha())
@@ -1262,17 +1485,17 @@ class VoiceToClaudeApp(rumps.App):
         self.last_processed_text = None
 
         # Push-to-Talk state
-        self.ptt_mode = CONFIG.get("ptt_mode", False)
         self.ptt_stop_event = threading.Event()
         self.ptt_recording = False
 
         # Initialize components
-        self.audio_engine = AudioEngine(CONFIG, self.set_state, self.on_recording_start)
+        self.audio_engine = AudioEngine(CONFIG, self.set_state)
         self.transcription_engine = TranscriptionEngine(
             CONFIG["model"],
             CONFIG.get("language")
         )
         self.output_handler = OutputHandler()
+        self.hud = FloatingHUD()
 
         # Key listener for PTT (Fn key uses Quartz, others use pynput)
         if HAS_PYNPUT or HAS_QUARTZ:
@@ -1283,23 +1506,6 @@ class VoiceToClaudeApp(rumps.App):
             )
         else:
             self.key_listener = None
-
-        # Sensitivity levels (higher number = less sensitive, needs louder speech)
-        self.sensitivity_levels = {
-            "Very Low (very noisy)": 3500,
-            "Low (noisy room)": 2500,
-            "Medium": 2000,
-            "High (quiet room)": 1200,
-        }
-
-        # Pause duration options (how long to wait after silence before sending)
-        self.pause_durations = {
-            "Short (1s)": 1.0,
-            "Medium (1.5s)": 1.5,
-            "Long (2s)": 2.0,
-            "Very Long (2.5s)": 2.5,
-            "Extra Long (3s)": 3.0,
-        }
 
         # Output modes
         self.output_modes = {
@@ -1321,46 +1527,15 @@ class VoiceToClaudeApp(rumps.App):
         self.status_item = rumps.MenuItem("Status: Loading...")
         self.stats_item = rumps.MenuItem("Session: 0 transcriptions, 0 words")
 
-        # Listening Mode submenu (Continuous vs Push-to-Talk)
-        self.listening_mode_menu = rumps.MenuItem("Listening Mode")
-        continuous_item = rumps.MenuItem("Continuous", callback=self.set_listening_mode)
-        continuous_item.mode_value = False
-        continuous_item.state = 0 if self.ptt_mode else 1
-        self.listening_mode_menu.add(continuous_item)
-
-        ptt_label = "Push-to-Talk" if HAS_PYNPUT else "Push-to-Talk (install pynput)"
-        ptt_item = rumps.MenuItem(ptt_label, callback=self.set_listening_mode)
-        ptt_item.mode_value = True
-        ptt_item.state = 1 if self.ptt_mode else 0
-        self.listening_mode_menu.add(ptt_item)
-
         # PTT Key submenu
         self.ptt_key_menu = rumps.MenuItem("PTT Key")
-        current_ptt_key = CONFIG.get("ptt_key", "right_option")
+        current_ptt_key = CONFIG.get("ptt_key", "fn")
         for key_name, display_name in KeyListener.KEY_DISPLAY_NAMES.items():
             item = rumps.MenuItem(display_name, callback=self.set_ptt_key)
             item.key_name = key_name
             if key_name == current_ptt_key:
                 item.state = 1
             self.ptt_key_menu.add(item)
-
-        # Sensitivity submenu
-        self.sensitivity_menu = rumps.MenuItem("Sensitivity")
-        for name, value in self.sensitivity_levels.items():
-            item = rumps.MenuItem(name, callback=self.set_sensitivity)
-            if value == CONFIG["speech_threshold"]:
-                item.state = 1
-            self.sensitivity_menu.add(item)
-
-        # Pause duration submenu
-        self.pause_menu = rumps.MenuItem("Pause Duration")
-        current_pause = CONFIG.get("silence_duration", 2.5)
-        for name, value in self.pause_durations.items():
-            item = rumps.MenuItem(name, callback=self.set_pause_duration)
-            item.duration_value = value
-            if abs(value - current_pause) < 0.1:  # Float comparison
-                item.state = 1
-            self.pause_menu.add(item)
 
         # Output mode submenu
         self.output_menu = rumps.MenuItem("Output Mode")
@@ -1432,14 +1607,6 @@ class VoiceToClaudeApp(rumps.App):
         self.notif_item = rumps.MenuItem("Notifications", callback=self.toggle_notifications)
         self.notif_item.state = 1 if CONFIG.get("show_notifications", True) else 0
 
-        # Ready sound toggle
-        self.ready_sound_item = rumps.MenuItem("Ready Sound", callback=self.toggle_ready_sound)
-        self.ready_sound_item.state = 1 if CONFIG.get("ready_sound", False) else 0
-
-        # Recording sound toggle
-        self.recording_sound_item = rumps.MenuItem("Recording Sound", callback=self.toggle_recording_sound)
-        self.recording_sound_item.state = 1 if CONFIG.get("recording_sound", False) else 0
-
         # Append mode toggle
         self.append_mode_item = rumps.MenuItem("Append Mode", callback=self.toggle_append_mode)
         self.append_mode_item.state = 1 if CONFIG.get("append_mode", False) else 0
@@ -1458,9 +1625,6 @@ class VoiceToClaudeApp(rumps.App):
         self.recent_menu.add(rumps.MenuItem("Export History...", callback=self.export_history))
         self.recent_menu.add(rumps.MenuItem("Clear History", callback=self.clear_history))
 
-        # Calibrate option
-        self.calibrate_item = rumps.MenuItem("Calibrate Microphone", callback=self.calibrate_mic)
-
         # Test microphone
         self.test_mic_item = rumps.MenuItem("Test Microphone", callback=self.test_microphone)
 
@@ -1473,10 +1637,7 @@ class VoiceToClaudeApp(rumps.App):
         self.menu = [
             rumps.MenuItem("Pause", callback=self.toggle_pause),
             None,
-            self.listening_mode_menu,
             self.ptt_key_menu,
-            self.sensitivity_menu,
-            self.pause_menu,
             self.output_menu,
             self.send_key_menu,
             self.model_menu,
@@ -1488,11 +1649,8 @@ class VoiceToClaudeApp(rumps.App):
             self.capitalize_item,
             self.smart_punct_item,
             self.notif_item,
-            self.ready_sound_item,
-            self.recording_sound_item,
             self.append_mode_item,
             None,
-            self.calibrate_item,
             self.test_mic_item,
             self.undo_item,
             self.recent_menu,
@@ -1508,69 +1666,32 @@ class VoiceToClaudeApp(rumps.App):
         self.state = state
         self.title = STATE_ICONS.get(state, "🎤")
         try:
-            if self.ptt_mode and state == State.READY:
+            if state == State.READY:
                 key_display = KeyListener.KEY_DISPLAY_NAMES.get(
-                    CONFIG.get("ptt_key", "right_option"), "Right Option"
+                    CONFIG.get("ptt_key", "fn"), "Fn (Globe)"
                 )
                 self.status_item.title = f"Status: PTT Ready — Hold {key_display}"
+                self.hud.set_idle(key_display)
+                self.hud.show()
+            elif state == State.SPEAKING:
+                self.status_item.title = f"Status: {STATE_DESCRIPTIONS.get(state, state)}"
+                self.hud.set_recording()
+            elif state == State.PROCESSING:
+                self.status_item.title = f"Status: {STATE_DESCRIPTIONS.get(state, state)}"
+                self.hud.set_processing()
+            elif state == State.PAUSED:
+                self.status_item.title = f"Status: {STATE_DESCRIPTIONS.get(state, state)}"
+                self.hud.hide()
             else:
                 self.status_item.title = f"Status: {STATE_DESCRIPTIONS.get(state, state)}"
         except:
             pass
 
-    def on_recording_start(self):
-        """Called when recording starts (speech detected)."""
-        if CONFIG.get("recording_sound"):
-            # Play in a thread to not block recording
-            threading.Thread(
-                target=lambda: self.output_handler.play_sound("Morse"),
-                daemon=True
-            ).start()
-
     # ---- Push-to-Talk methods ----
-
-    def set_listening_mode(self, sender):
-        """Switch between continuous and push-to-talk modes."""
-        want_ptt = getattr(sender, 'mode_value', False)
-
-        if want_ptt and not HAS_PYNPUT and not HAS_QUARTZ:
-            rumps.alert(
-                title="pynput Required",
-                message="Push-to-Talk requires the pynput package.\n\n"
-                        "Install it with:\n  pip3 install pynput\n\n"
-                        "Then restart Voice to Claude.",
-                ok="OK"
-            )
-            return
-
-        self.ptt_mode = want_ptt
-        CONFIG["ptt_mode"] = want_ptt
-        save_config(CONFIG)
-
-        # Update checkmarks
-        for item in self.listening_mode_menu.values():
-            item.state = 1 if getattr(item, 'mode_value', None) == want_ptt else 0
-
-        if want_ptt:
-            # Pause continuous listening, start key listener
-            self.audio_engine.paused = True
-            if self.key_listener:
-                self.key_listener.start()
-            self.set_state(State.READY)
-            if CONFIG.get("sound_effects"):
-                self.output_handler.play_sound("Pop")
-        else:
-            # Stop key listener, resume continuous listening
-            if self.key_listener:
-                self.key_listener.stop()
-            self.audio_engine.paused = self.paused  # Restore paused state
-            self.set_state(State.PAUSED if self.paused else State.READY)
-            if CONFIG.get("sound_effects"):
-                self.output_handler.play_sound("Pop")
 
     def set_ptt_key(self, sender):
         """Change the push-to-talk key."""
-        key_name = getattr(sender, 'key_name', 'right_option')
+        key_name = getattr(sender, 'key_name', 'fn')
         CONFIG["ptt_key"] = key_name
         save_config(CONFIG)
 
@@ -1580,9 +1701,8 @@ class VoiceToClaudeApp(rumps.App):
         for item in self.ptt_key_menu.values():
             item.state = 1 if getattr(item, 'key_name', None) == key_name else 0
 
-        # Update status text if in PTT mode
-        if self.ptt_mode:
-            self.set_state(State.READY)
+        # Update status text with new key name
+        self.set_state(State.READY)
 
     def _ptt_key_pressed(self):
         """Called when PTT key is pressed down."""
@@ -1610,11 +1730,23 @@ class VoiceToClaudeApp(rumps.App):
     def _ptt_record_and_transcribe(self):
         """Record while key held, then transcribe and output. Runs in daemon thread."""
         try:
-            audio_file = self.audio_engine.record_until_released(self.ptt_stop_event)
+            audio_file = self.audio_engine.record_until_released(
+                self.ptt_stop_event, level_callback=self.hud.update_audio_level
+            )
+
+            log.info(f"record_until_released returned: {audio_file}")
 
             if audio_file:
+                try:
+                    fsize = os.path.getsize(audio_file)
+                    log.info(f"Audio file size: {fsize} bytes")
+                except:
+                    pass
+
                 self.set_state(State.PROCESSING)
+                log.info("Starting transcription...")
                 text = self.transcription_engine.transcribe(audio_file)
+                log.info(f"Transcription result: {repr(text)}")
 
                 try:
                     os.unlink(audio_file)
@@ -1623,15 +1755,18 @@ class VoiceToClaudeApp(rumps.App):
 
                 if text:
                     self._output_text(text)
+                else:
+                    log.warning("Text was None or empty — skipped output")
+            else:
+                log.warning("No audio file returned (too short?)")
         except Exception as e:
-            print(f"PTT error: {e}")
+            log.error(f"PTT error: {e}", exc_info=True)
         finally:
             self.ptt_recording = False
-            if self.ptt_mode:
-                self.set_state(State.READY)
+            self.set_state(State.READY)
 
     def _output_text(self, text):
-        """Process and output transcribed text. Shared by continuous and PTT modes."""
+        """Process and output transcribed text."""
         # Check for control commands first
         control_cmd = DictationProcessor.check_control_command(text)
 
@@ -1694,47 +1829,25 @@ class VoiceToClaudeApp(rumps.App):
             self.output_handler.show_notification("Voice to Claude", preview)
 
     def toggle_pause(self, sender):
-        """Toggle pause/resume listening."""
+        """Toggle pause/resume PTT."""
         if self.paused:
             self.paused = False
-            if not self.ptt_mode:
-                self.audio_engine.paused = False
-            elif self.key_listener:
+            if self.key_listener:
                 self.key_listener.start()
             sender.title = "Pause"
+            self.hud.show()
             self.set_state(State.READY)
             if CONFIG.get("sound_effects"):
                 self.output_handler.play_sound("Pop")
         else:
             self.paused = True
-            self.audio_engine.paused = True
-            if self.ptt_mode and self.key_listener:
+            if self.key_listener:
                 self.key_listener.stop()
             sender.title = "Resume"
+            self.hud.hide()
             self.set_state(State.PAUSED)
             if CONFIG.get("sound_effects"):
                 self.output_handler.play_sound("Blow")
-
-    def set_sensitivity(self, sender):
-        """Change microphone sensitivity."""
-        new_threshold = self.sensitivity_levels.get(sender.title, 2000)
-        CONFIG["speech_threshold"] = new_threshold
-        self.audio_engine.config["speech_threshold"] = new_threshold
-        save_config(CONFIG)
-
-        for item in self.sensitivity_menu.values():
-            item.state = 1 if item.title == sender.title else 0
-
-    def set_pause_duration(self, sender):
-        """Change how long to wait after silence before sending."""
-        duration = getattr(sender, 'duration_value', 2.5)
-        CONFIG["silence_duration"] = duration
-        self.audio_engine.config["silence_duration"] = duration
-        save_config(CONFIG)
-
-        for item in self.pause_menu.values():
-            expected = getattr(item, 'duration_value', None)
-            item.state = 1 if expected == duration else 0
 
     def set_output_mode(self, sender):
         """Change output mode."""
@@ -1810,18 +1923,6 @@ class VoiceToClaudeApp(rumps.App):
         sender.state = 1 if CONFIG["show_notifications"] else 0
         save_config(CONFIG)
 
-    def toggle_ready_sound(self, sender):
-        """Toggle ready sound (beep when ready to listen again)."""
-        CONFIG["ready_sound"] = not CONFIG.get("ready_sound", False)
-        sender.state = 1 if CONFIG["ready_sound"] else 0
-        save_config(CONFIG)
-
-    def toggle_recording_sound(self, sender):
-        """Toggle recording sound (beep when recording starts)."""
-        CONFIG["recording_sound"] = not CONFIG.get("recording_sound", False)
-        sender.state = 1 if CONFIG["recording_sound"] else 0
-        save_config(CONFIG)
-
     def toggle_append_mode(self, sender):
         """Toggle append mode (append to clipboard instead of replacing)."""
         CONFIG["append_mode"] = not CONFIG.get("append_mode", False)
@@ -1874,84 +1975,13 @@ class VoiceToClaudeApp(rumps.App):
             expected_index = getattr(item, 'device_index', None)
             item.state = 1 if expected_index == device_index else 0
 
-    def calibrate_mic(self, sender):
-        """Calibrate microphone by measuring ambient noise level."""
-        # Pause listening during calibration
-        was_paused = self.paused
-        self.paused = True
-        self.audio_engine.paused = True
-
-        rumps.alert(
-            title="Calibrating Microphone",
-            message="Stay quiet for 3 seconds to measure background noise...",
-            ok="Start"
-        )
-
-        try:
-            p = pyaudio.PyAudio()
-            stream_kwargs = {
-                'format': pyaudio.paInt16,
-                'channels': CONFIG["channels"],
-                'rate': CONFIG["rate"],
-                'input': True,
-                'frames_per_buffer': CONFIG["chunk"],
-            }
-            if CONFIG.get("input_device") is not None:
-                stream_kwargs['input_device_index'] = CONFIG["input_device"]
-
-            stream = p.open(**stream_kwargs)
-
-            levels = []
-            for _ in range(int(3 * CONFIG["rate"] / CONFIG["chunk"])):
-                data = stream.read(CONFIG["chunk"], exception_on_overflow=False)
-                level = self.audio_engine.get_audio_level(data)
-                levels.append(level)
-
-            stream.stop_stream()
-            stream.close()
-            p.terminate()
-
-            avg_level = sum(levels) / len(levels)
-            max_level = max(levels)
-
-            # Suggest threshold at 2x max level
-            suggested = int(max_level * 2) + 100
-            suggested = max(500, min(3000, suggested))  # Clamp to reasonable range
-
-            result = rumps.alert(
-                title="Calibration Complete",
-                message=f"Background noise:\n"
-                        f"  Average: {int(avg_level)}\n"
-                        f"  Peak: {int(max_level)}\n\n"
-                        f"Suggested threshold: {suggested}\n"
-                        f"Current threshold: {CONFIG['speech_threshold']}\n\n"
-                        f"Apply suggested threshold?",
-                ok="Apply",
-                cancel="Cancel"
-            )
-
-            if result == 1:  # OK clicked
-                CONFIG["speech_threshold"] = suggested
-                self.audio_engine.config["speech_threshold"] = suggested
-                save_config(CONFIG)
-
-                # Update sensitivity menu checkmarks
-                for item in self.sensitivity_menu.values():
-                    item.state = 0
-
-        except Exception as e:
-            rumps.alert(title="Calibration Failed", message=str(e))
-
-        # Resume if wasn't paused
-        if not was_paused:
-            self.paused = False
-            self.audio_engine.paused = False
-
     def test_microphone(self, sender):
         """Test microphone with live audio level display."""
         was_paused = self.paused
-        self.paused = True
-        self.audio_engine.paused = True
+        if not self.paused:
+            self.paused = True
+            if self.key_listener:
+                self.key_listener.stop()
 
         try:
             p = pyaudio.PyAudio()
@@ -1992,8 +2022,7 @@ class VoiceToClaudeApp(rumps.App):
             peak = max(samples)
             min_level = min(samples)
 
-            threshold = CONFIG["speech_threshold"]
-            status = "✓ Good" if peak > threshold else "⚠ Too quiet"
+            status = "Good" if peak > 500 else "Too quiet"
 
             rumps.alert(
                 title="Microphone Test Complete",
@@ -2001,50 +2030,42 @@ class VoiceToClaudeApp(rumps.App):
                         f"  Average: {int(avg)}\n"
                         f"  Peak: {int(peak)}\n"
                         f"  Minimum: {int(min_level)}\n\n"
-                        f"  Speech threshold: {threshold}\n"
                         f"  Status: {status}\n\n"
                         f"If status shows 'Too quiet', try:\n"
                         f"  • Speaking louder\n"
                         f"  • Moving closer to mic\n"
-                        f"  • Lowering sensitivity setting",
+                        f"  • Selecting a different input device",
                 ok="OK"
             )
 
         except Exception as e:
             rumps.alert(title="Test Failed", message=str(e))
 
-        # Resume if wasn't paused
+        # Resume if wasn't paused before test
         if not was_paused:
             self.paused = False
-            self.audio_engine.paused = False
+            if self.key_listener:
+                self.key_listener.start()
         self.set_state(State.PAUSED if self.paused else State.READY)
 
     def show_help(self, sender):
         """Show quick help dialog."""
         rumps.alert(
             title="Voice to Claude - Quick Help",
-            message="How to use:\n\n"
-                    "Continuous mode:\n"
+            message="How to use (Push-to-Talk):\n\n"
                     "1. Look for 🎤 in the menu bar (ready state)\n"
-                    "2. Speak naturally - it auto-detects speech\n"
-                    "3. Pause briefly when done speaking\n"
-                    "4. Text is transcribed and pasted\n\n"
-                    "Push-to-Talk mode:\n"
-                    "1. Enable via Listening Mode > Push-to-Talk\n"
-                    "2. Hold the PTT key (default: Right Option)\n"
+                    "2. Hold the PTT key (default: Fn/Globe)\n"
                     "3. Speak while holding the key\n"
                     "4. Release to transcribe and paste\n\n"
                     "Icon states:\n"
-                    "  🎤 Ready - listening for speech\n"
-                    "  👂 Detecting - heard something\n"
-                    "  🗣 Recording - capturing speech\n"
-                    "  ⚙️ Processing - transcribing\n"
-                    "  ⏸ Paused - click to resume\n\n"
+                    "  🎤 Ready — hold PTT key to speak\n"
+                    "  🗣 Recording — capturing speech\n"
+                    "  ⚙️ Processing — transcribing\n"
+                    "  ⏸ Paused — click to resume\n\n"
                     "Tips:\n"
                     "  • Say 'period', 'comma', 'new line'\n"
-                    "  • Adjust sensitivity for your room\n"
-                    "  • Use Calibrate to auto-tune\n"
-                    "  • Change PTT key in the PTT Key menu\n\n"
+                    "  • Change PTT key in the PTT Key menu\n"
+                    "  • Use Pause/Resume to disable PTT\n\n"
                     "For full docs: github.com/Wal33D/voice-to-claude",
             ok="Got it"
         )
@@ -2181,9 +2202,10 @@ class VoiceToClaudeApp(rumps.App):
         load_thread.start()
 
     def _load_model(self):
-        """Load the Whisper model in background."""
+        """Load the Whisper model in background, then start PTT key listener."""
         try:
             self.transcription_engine.load_model()
+            self.hud.create_and_show()
             self.set_state(State.READY)
 
             if CONFIG.get("sound_effects"):
@@ -2191,52 +2213,13 @@ class VoiceToClaudeApp(rumps.App):
 
             self.audio_engine.running = True
 
-            # If PTT mode on startup, pause continuous and start key listener
-            if self.ptt_mode:
-                self.audio_engine.paused = True
-                if self.key_listener:
-                    self.key_listener.start()
-
-            listen_thread = threading.Thread(target=self._listen_loop, daemon=True)
-            listen_thread.start()
+            # Start PTT key listener
+            if self.key_listener:
+                self.key_listener.start()
 
         except Exception as e:
             print(f"Failed to load model: {e}")
             self.set_state(State.ERROR)
-
-    def _listen_loop(self):
-        """Main listening loop (continuous mode)."""
-        while self.running:
-            # In PTT mode, sleep and let the key listener handle recording
-            if self.ptt_mode:
-                time.sleep(0.1)
-                continue
-
-            if self.paused:
-                time.sleep(0.1)
-                continue
-
-            audio_file = self.audio_engine.record_until_silence()
-
-            if audio_file and self.running and not self.paused and not self.ptt_mode:
-                self.set_state(State.PROCESSING)
-
-                text = self.transcription_engine.transcribe(audio_file)
-
-                try:
-                    os.unlink(audio_file)
-                except:
-                    pass
-
-                if text and self.running and not self.paused:
-                    self._output_text(text)
-                    time.sleep(0.3)
-
-            if self.running and not self.paused and not self.ptt_mode:
-                self.set_state(State.READY)
-                if CONFIG.get("ready_sound"):
-                    self.output_handler.play_sound("Pop")
-                time.sleep(0.2)
 
 # ============================================================================
 # MAIN
