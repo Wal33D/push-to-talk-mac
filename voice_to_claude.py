@@ -230,7 +230,7 @@ if HAS_APPKIT:
             style = NSMutableParagraphStyle.alloc().init()
             style.setAlignment_(NSTextAlignmentCenter)
             attrs = {
-                NSFontAttributeName: NSFont.systemFontOfSize_(13.0),
+                NSFontAttributeName: NSFont.systemFontOfSize_(11.0),
                 NSForegroundColorAttributeName: NSColor.whiteColor(),
                 NSParagraphStyleAttributeName: style,
             }
@@ -315,9 +315,9 @@ if HAS_APPKIT:
             if screen is None:
                 return
             screen_frame = screen.frame()
-            hud_w = 300.0
-            hud_h = 40.0
-            bottom_margin = 60.0
+            hud_w = 220.0
+            hud_h = 36.0
+            bottom_margin = 20.0
             x = (screen_frame.size.width - hud_w) / 2.0
             y = bottom_margin
 
@@ -404,9 +404,9 @@ class FloatingHUD:
     performSelectorOnMainThread to ensure thread safety.
     """
 
-    HUD_WIDTH = 300
-    HUD_HEIGHT = 40
-    BOTTOM_MARGIN = 60
+    HUD_WIDTH = 220
+    HUD_HEIGHT = 36
+    BOTTOM_MARGIN = 20
     NUM_BARS = 12
 
     def __init__(self):
