@@ -27,8 +27,8 @@
 ## Quick Start
 
 ```bash
-git clone https://github.com/Wal33D/voice-to-claude.git
-cd voice-to-claude
+git clone https://github.com/Wal33D/push-to-talk-mac.git
+cd push-to-talk-mac
 ./install.sh
 voice
 ```

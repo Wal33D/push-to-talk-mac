@@ -45,8 +45,8 @@ Before submitting:
 
 ```bash
 # Clone your fork
-git clone https://github.com/YOUR_USERNAME/voice-to-claude.git
-cd voice-to-claude
+git clone https://github.com/YOUR_USERNAME/push-to-talk-mac.git
+cd push-to-talk-mac
 
 # Install into a virtual environment
 ./install.sh

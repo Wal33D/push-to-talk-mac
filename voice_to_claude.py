@@ -2066,7 +2066,7 @@ class VoiceToClaudeApp(rumps.App):
                     "  • Say 'period', 'comma', 'new line'\n"
                     "  • Change PTT key in the PTT Key menu\n"
                     "  • Use Pause/Resume to disable PTT\n\n"
-                    "For full docs: github.com/Wal33D/voice-to-claude",
+                    "For full docs: github.com/Wal33D/push-to-talk-mac",
             ok="Got it"
         )
 
@@ -2084,7 +2084,7 @@ class VoiceToClaudeApp(rumps.App):
                     f"Lifetime stats:\n"
                     f"  {total_transcriptions} transcriptions\n"
                     f"  {total_words} words\n\n"
-                    f"github.com/Wal33D/voice-to-claude",
+                    f"github.com/Wal33D/push-to-talk-mac",
             ok="OK"
         )
 
