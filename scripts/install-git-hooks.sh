@@ -1,0 +1,11 @@
+#!/usr/bin/env bash
+
+set -euo pipefail
+
+ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+cd "$ROOT_DIR"
+
+git config core.hooksPath .githooks
+echo "Configured git hooks path: .githooks"
+echo "pre-push checks will now run automatically on git push."
+

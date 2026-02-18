@@ -43,6 +43,30 @@ Before submitting:
 7. Run local sanity checks:
    - `PYTHONPYCACHEPREFIX=/tmp/pycache python3 -m py_compile voice_to_claude.py`
    - `bash -n install.sh autostart.sh voice`
+   - `PYTHONPYCACHEPREFIX=/tmp/pycache python3 -m unittest discover -s tests/unit -p "test_*.py"`
+
+### Pre-Push Checks
+
+Run the automated checks manually:
+
+```bash
+./scripts/pre-push-check.sh
+```
+
+Run with runtime smoke validation too:
+
+```bash
+./scripts/pre-push-check.sh --smoke
+```
+
+Enable repository-managed Git hooks:
+
+```bash
+./scripts/install-git-hooks.sh
+```
+
+After that, `git push` will automatically run `scripts/pre-push-check.sh`.
+It validates syntax and runs `tests/unit` automatically.
 
 ## Development Setup
 
