@@ -40,6 +40,9 @@ Before submitting:
 4. Test pause/resume
 5. Test `voice --debug` and verify log output
 6. Verify `./autostart.sh enable && ./autostart.sh status`
+7. Run local sanity checks:
+   - `PYTHONPYCACHEPREFIX=/tmp/pycache python3 -m py_compile voice_to_claude.py`
+   - `bash -n install.sh autostart.sh voice`
 
 ## Development Setup
 

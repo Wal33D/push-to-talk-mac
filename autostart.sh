@@ -8,12 +8,14 @@
 #   ./autostart.sh status   - Check current status
 #
 
+set -euo pipefail
+
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PLIST_NAME="com.voicetoclaude.plist"
 PLIST_SRC="$SCRIPT_DIR/$PLIST_NAME"
 PLIST_DST="$HOME/Library/LaunchAgents/$PLIST_NAME"
 
-case "$1" in
+case "${1:-}" in
     enable)
         echo "Enabling Voice to Claude autostart..."
 

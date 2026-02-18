@@ -1,15 +1,15 @@
 #!/bin/bash
 #
-# Voice to Claude v2.0 — Installation Script
+# Voice to Claude v2.0.1 — Installation Script
 #
 # Creates a virtual environment, installs all dependencies,
 # and sets up the `voice` command.
 #
 
-set -e
+set -euo pipefail
 
 echo "========================================"
-echo "  Voice to Claude v2.0 — Installer"
+echo "  Voice to Claude v2.0.1 — Installer"
 echo "========================================"
 echo
 
@@ -49,12 +49,19 @@ if ! command -v brew &> /dev/null; then
 fi
 echo "✓ Homebrew"
 
-# ── 4. Install portaudio (required by PyAudio) ───────────────────────────
+# ── 4. Install native dependencies ────────────────────────────────────────
 if ! brew list portaudio &> /dev/null; then
     echo "Installing portaudio..."
     brew install portaudio
 else
     echo "✓ portaudio already installed"
+fi
+
+if ! brew list ffmpeg &> /dev/null; then
+    echo "Installing ffmpeg..."
+    brew install ffmpeg
+else
+    echo "✓ ffmpeg already installed"
 fi
 
 # ── 5. Create virtual environment ────────────────────────────────────────
@@ -79,11 +86,13 @@ echo "✓ Launcher script ready"
 
 # ── 8. Add voice alias to shell config ───────────────────────────────────
 SHELL_RC="$HOME/.zshrc"
-if [[ "$SHELL" == *"bash"* ]]; then
+SHELL_PATH="${SHELL:-}"
+if [[ "$SHELL_PATH" == *"bash"* ]]; then
     SHELL_RC="$HOME/.bashrc"
 fi
 
 ALIAS_LINE="alias voice=\"$SCRIPT_DIR/voice\""
+ALIAS_LINE_ESCAPED="$(printf '%s\n' "$ALIAS_LINE" | sed 's/[&~\\]/\\&/g')"
 
 if ! grep -q "alias voice=" "$SHELL_RC" 2>/dev/null; then
     echo "" >> "$SHELL_RC"
@@ -92,7 +101,7 @@ if ! grep -q "alias voice=" "$SHELL_RC" 2>/dev/null; then
     echo "✓ Added 'voice' alias to $SHELL_RC"
 else
     # Update existing alias to point to new launcher
-    sed -i '' "s|alias voice=.*|$ALIAS_LINE|" "$SHELL_RC"
+    sed -i '' "s~^alias voice=.*~$ALIAS_LINE_ESCAPED~" "$SHELL_RC"
     echo "✓ Updated 'voice' alias in $SHELL_RC"
 fi
 

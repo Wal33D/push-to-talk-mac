@@ -84,7 +84,7 @@ try:
 except ImportError:
     HAS_APPKIT = False
 
-__version__ = "2.0.0"
+__version__ = "2.0.1"
 __author__ = "Waleed Judah"
 
 # ============================================================================
@@ -105,6 +105,7 @@ DEFAULT_CONFIG = {
 
     # Behavior
     "auto_send": True,
+    "output_mode": "paste_send",
     "sound_effects": True,
     "show_notifications": True,
     "dictation_commands": True,
@@ -124,29 +125,44 @@ DEFAULT_CONFIG = {
     "ptt_key": "fn",  # Key to hold for PTT
 }
 
+VALID_OUTPUT_MODES = {"paste_send", "paste_only", "type_send", "type_only", "copy_only"}
+
+def normalize_config(config):
+    """Normalize config data and keep backward compatibility for older keys."""
+    normalized = DEFAULT_CONFIG.copy()
+    if isinstance(config, dict):
+        normalized.update(config)
+
+    output_mode = normalized.get("output_mode")
+    if output_mode not in VALID_OUTPUT_MODES:
+        output_mode = "paste_send" if normalized.get("auto_send", True) else "paste_only"
+    normalized["output_mode"] = output_mode
+    normalized["auto_send"] = output_mode in {"paste_send", "type_send"}
+    return normalized
+
 def load_config():
     """Load config from file or create default."""
     try:
         CONFIG_DIR.mkdir(parents=True, exist_ok=True)
         if CONFIG_FILE.exists():
-            with open(CONFIG_FILE) as f:
+            with open(CONFIG_FILE, encoding="utf-8") as f:
                 saved = json.load(f)
-                # Merge with defaults (in case new options added)
-                config = DEFAULT_CONFIG.copy()
-                config.update(saved)
-                return config
-    except Exception:
-        pass
-    return DEFAULT_CONFIG.copy()
+                return normalize_config(saved)
+    except Exception as exc:
+        log.warning(f"Failed to load config from {CONFIG_FILE}: {exc}")
+    return normalize_config({})
 
 def save_config(config):
     """Save config to file."""
     try:
         CONFIG_DIR.mkdir(parents=True, exist_ok=True)
-        with open(CONFIG_FILE, 'w') as f:
-            json.dump(config, f, indent=2)
-    except Exception:
-        pass
+        normalized = normalize_config(config)
+        tmp_path = CONFIG_FILE.with_suffix(".json.tmp")
+        with open(tmp_path, 'w', encoding="utf-8") as f:
+            json.dump(normalized, f, indent=2)
+        tmp_path.replace(CONFIG_FILE)
+    except Exception as exc:
+        log.warning(f"Failed to save config to {CONFIG_FILE}: {exc}")
 
 CONFIG = load_config()
 
@@ -538,6 +554,7 @@ class AudioEngine:
         except Exception as e:
             print(f"PTT: Failed to open audio stream: {e}")
             self.state_callback(State.ERROR)
+            p.terminate()
             return None
 
         frames = []
@@ -640,13 +657,13 @@ class FnKeyMonitor:
         if self._source is not None:
             try:
                 Quartz.CFRunLoopSourceInvalidate(self._source)
-            except Exception:
-                pass
+            except Exception as exc:
+                log.debug(f"Failed to invalidate Fn runloop source: {exc}")
         if self._tap is not None:
             try:
                 Quartz.CGEventTapEnable(self._tap, False)
-            except Exception:
-                pass
+            except Exception as exc:
+                log.debug(f"Failed to disable Fn event tap: {exc}")
         self._tap = None
         self._source = None
         self._thread = None
@@ -1177,7 +1194,7 @@ class DictationProcessor:
         r'\bkinda\b': "kind of",
         r'\bsorta\b': "sort of",
         r'\blotta\b': "lot of",
-        r'\bouttta\b': "out of",
+        r'\boutta\b': "out of",
         r'\bcuz\b': "because",
         r'\bcause\b': "because",
         r'\btho\b': "though",
@@ -1237,8 +1254,12 @@ class DictationProcessor:
                 replacement = cls.COMMANDS[command]
 
                 # Case-insensitive replacement
-                # Use re.escape on replacement to handle special chars like backslash
-                pattern = re.compile(re.escape(command), re.IGNORECASE)
+                # Match whole words/phrases only to avoid replacing substrings
+                # (e.g. "period" should not mutate "periodic").
+                pattern = re.compile(
+                    r'(?<!\w)' + re.escape(command) + r'(?!\w)',
+                    re.IGNORECASE,
+                )
                 # For sub(), backslash needs to be escaped in replacement string
                 safe_replacement = replacement.replace('\\', '\\\\')
                 result = pattern.sub(safe_replacement, result)
@@ -1316,6 +1337,11 @@ class DictationProcessor:
 # OUTPUT HANDLER
 # ============================================================================
 
+def escape_applescript_string(text):
+    """Escape text for safe inclusion in AppleScript string literals."""
+    return str(text).replace("\\", "\\\\").replace('"', '\\"')
+
+
 class OutputHandler:
     """Handles pasting text to the active window."""
 
@@ -1327,8 +1353,8 @@ class OutputHandler:
                 current = pyperclip.paste()
                 if current:
                     text = current + " " + text
-            except:
-                pass
+            except Exception as exc:
+                log.debug(f"Failed to read clipboard for append mode: {exc}")
         return text
 
     @staticmethod
@@ -1358,7 +1384,8 @@ class OutputHandler:
             subprocess.run(['osascript', '-e', script], check=True,
                          capture_output=True, timeout=5)
             return True
-        except Exception:
+        except Exception as exc:
+            log.debug(f"paste_and_send failed: {exc}")
             return False
 
     @staticmethod
@@ -1376,7 +1403,8 @@ class OutputHandler:
             subprocess.run(['osascript', '-e', script], check=True,
                          capture_output=True, timeout=5)
             return True
-        except Exception:
+        except Exception as exc:
+            log.debug(f"paste_only failed: {exc}")
             return False
 
     @staticmethod
@@ -1389,7 +1417,7 @@ class OutputHandler:
     def type_text(text):
         """Type text character by character (for apps that don't support paste)."""
         # Escape special characters for AppleScript
-        escaped = text.replace('\\', '\\\\').replace('"', '\\"')
+        escaped = escape_applescript_string(text)
 
         script = f'''
         tell application "System Events"
@@ -1400,13 +1428,14 @@ class OutputHandler:
             subprocess.run(['osascript', '-e', script], check=True,
                          capture_output=True, timeout=30)
             return True
-        except Exception:
+        except Exception as exc:
+            log.debug(f"type_text failed: {exc}")
             return False
 
     @staticmethod
     def type_and_send(text, send_key="return"):
         """Type text and press send key."""
-        escaped = text.replace('\\', '\\\\').replace('"', '\\"')
+        escaped = escape_applescript_string(text)
 
         # Build the send key command
         if send_key == "ctrl_return":
@@ -1429,7 +1458,8 @@ class OutputHandler:
             subprocess.run(['osascript', '-e', script], check=True,
                          capture_output=True, timeout=30)
             return True
-        except Exception:
+        except Exception as exc:
+            log.debug(f"type_and_send failed: {exc}")
             return False
 
     @staticmethod
@@ -1438,28 +1468,31 @@ class OutputHandler:
         try:
             subprocess.run(['afplay', f'/System/Library/Sounds/{sound_name}.aiff'],
                          capture_output=True, timeout=2)
-        except Exception:
-            pass
+        except Exception as exc:
+            log.debug(f"Failed to play sound {sound_name}: {exc}")
 
     @staticmethod
     def stop_speaking():
         """Stop any currently running say command."""
         try:
             subprocess.run(['pkill', '-x', 'say'], capture_output=True, timeout=2)
-        except Exception:
-            pass
+        except Exception as exc:
+            log.debug(f"Failed to stop say process: {exc}")
 
     @staticmethod
     def show_notification(title, message, sound=False):
         """Show a macOS notification."""
+        escaped_title = escape_applescript_string(str(title).replace("\n", " "))
+        escaped_message = escape_applescript_string(str(message).replace("\n", " "))
+        sound_clause = ' sound name "default"' if sound else ""
         script = f'''
-        display notification "{message}" with title "{title}"
+        display notification "{escaped_message}" with title "{escaped_title}"{sound_clause}
         '''
         try:
             subprocess.run(['osascript', '-e', script],
                          capture_output=True, timeout=2)
-        except Exception:
-            pass
+        except Exception as exc:
+            log.debug(f"Failed to show notification: {exc}")
 
 # ============================================================================
 # MENU BAR APPLICATION
@@ -1539,7 +1572,9 @@ class VoiceToClaudeApp(rumps.App):
 
         # Output mode submenu
         self.output_menu = rumps.MenuItem("Output Mode")
-        current_mode = "paste_send" if CONFIG["auto_send"] else "paste_only"
+        current_mode = CONFIG.get("output_mode")
+        if current_mode not in self.output_modes.values():
+            current_mode = "paste_send" if CONFIG.get("auto_send", True) else "paste_only"
         for name, mode in self.output_modes.items():
             item = rumps.MenuItem(name, callback=self.set_output_mode)
             if mode == current_mode:
@@ -1620,10 +1655,7 @@ class VoiceToClaudeApp(rumps.App):
 
         # Recent transcriptions submenu
         self.recent_menu = rumps.MenuItem("Recent Transcriptions")
-        self.recent_menu.add(rumps.MenuItem("(none yet)"))
-        self.recent_menu.add(None)  # Separator
-        self.recent_menu.add(rumps.MenuItem("Export History...", callback=self.export_history))
-        self.recent_menu.add(rumps.MenuItem("Clear History", callback=self.clear_history))
+        self._rebuild_recent_menu()
 
         # Test microphone
         self.test_mic_item = rumps.MenuItem("Test Microphone", callback=self.test_microphone)
@@ -1665,27 +1697,24 @@ class VoiceToClaudeApp(rumps.App):
         """Update current state and menu bar icon."""
         self.state = state
         self.title = STATE_ICONS.get(state, "🎤")
+        status_text = STATE_DESCRIPTIONS.get(state, state)
         try:
             if state == State.READY:
                 key_display = KeyListener.KEY_DISPLAY_NAMES.get(
                     CONFIG.get("ptt_key", "fn"), "Fn (Globe)"
                 )
-                self.status_item.title = f"Status: PTT Ready — Hold {key_display}"
+                status_text = f"PTT Ready — Hold {key_display}"
                 self.hud.set_idle(key_display)
                 self.hud.show()
             elif state == State.SPEAKING:
-                self.status_item.title = f"Status: {STATE_DESCRIPTIONS.get(state, state)}"
                 self.hud.set_recording()
             elif state == State.PROCESSING:
-                self.status_item.title = f"Status: {STATE_DESCRIPTIONS.get(state, state)}"
                 self.hud.set_processing()
             elif state == State.PAUSED:
-                self.status_item.title = f"Status: {STATE_DESCRIPTIONS.get(state, state)}"
                 self.hud.hide()
-            else:
-                self.status_item.title = f"Status: {STATE_DESCRIPTIONS.get(state, state)}"
-        except:
-            pass
+        except Exception as exc:
+            log.debug(f"Failed to update HUD/state UI: {exc}")
+        self.status_item.title = f"Status: {status_text}"
 
     # ---- Push-to-Talk methods ----
 
@@ -1714,10 +1743,11 @@ class VoiceToClaudeApp(rumps.App):
         self.ptt_stop_event.clear()
 
         # Play a ding sound when PTT key is pressed
-        threading.Thread(
-            target=lambda: self.output_handler.play_sound("Tink"),
-            daemon=True
-        ).start()
+        if CONFIG.get("sound_effects"):
+            threading.Thread(
+                target=lambda: self.output_handler.play_sound("Tink"),
+                daemon=True
+            ).start()
 
         # Spawn recording thread
         t = threading.Thread(target=self._ptt_record_and_transcribe, daemon=True)
@@ -1740,8 +1770,8 @@ class VoiceToClaudeApp(rumps.App):
                 try:
                     fsize = os.path.getsize(audio_file)
                     log.info(f"Audio file size: {fsize} bytes")
-                except:
-                    pass
+                except Exception as exc:
+                    log.debug(f"Failed to stat temp audio file: {exc}")
 
                 self.set_state(State.PROCESSING)
                 log.info("Starting transcription...")
@@ -1750,8 +1780,8 @@ class VoiceToClaudeApp(rumps.App):
 
                 try:
                     os.unlink(audio_file)
-                except:
-                    pass
+                except Exception as exc:
+                    log.debug(f"Failed to remove temp audio file: {exc}")
 
                 if text:
                     self._output_text(text)
@@ -1774,7 +1804,10 @@ class VoiceToClaudeApp(rumps.App):
             if CONFIG.get("sound_effects"):
                 self.output_handler.play_sound("Basso")
             script = 'tell application "System Events" to keystroke "z" using command down'
-            subprocess.run(['osascript', '-e', script], capture_output=True, timeout=2)
+            try:
+                subprocess.run(['osascript', '-e', script], capture_output=True, timeout=2)
+            except Exception as exc:
+                log.debug(f"Failed to issue scratch/undo shortcut: {exc}")
             return
 
         elif control_cmd == "CANCEL":
@@ -1789,7 +1822,6 @@ class VoiceToClaudeApp(rumps.App):
                 return
         else:
             # Normal processing
-            self.set_state(State.SENDING)
             self.last_original_text = text
             processed_text = DictationProcessor.process(
                 text,
@@ -1852,7 +1884,7 @@ class VoiceToClaudeApp(rumps.App):
     def set_output_mode(self, sender):
         """Change output mode."""
         mode = self.output_modes.get(sender.title, "paste_send")
-        CONFIG["auto_send"] = (mode == "paste_send")
+        CONFIG["auto_send"] = mode in {"paste_send", "type_send"}
         CONFIG["output_mode"] = mode
         save_config(CONFIG)
 
@@ -1943,6 +1975,9 @@ class VoiceToClaudeApp(rumps.App):
 
     def _populate_device_menu(self):
         """Populate the input device menu."""
+        for key in list(self.device_menu.keys()):
+            del self.device_menu[key]
+
         # Default device option
         default_item = rumps.MenuItem("System Default", callback=self.set_device)
         default_item.state = 1 if CONFIG.get("input_device") is None else 0
@@ -1959,7 +1994,7 @@ class VoiceToClaudeApp(rumps.App):
                     item.state = 1
                 self.device_menu.add(item)
         except Exception as e:
-            print(f"Failed to list devices: {e}")
+            log.warning(f"Failed to list devices: {e}")
 
     def set_device(self, sender):
         """Set the input device."""
@@ -2103,13 +2138,9 @@ class VoiceToClaudeApp(rumps.App):
 
     def _rebuild_recent_menu(self):
         """Rebuild the recent transcriptions menu."""
-        # Clear and rebuild
-        keys_to_remove = [k for k in self.recent_menu.keys()
-                         if k not in ["Export History...", "Clear History"]]
-        for key in keys_to_remove:
+        for key in list(self.recent_menu.keys()):
             del self.recent_menu[key]
 
-        # Add transcriptions at the top
         if not self.recent_transcriptions:
             self.recent_menu["(none yet)"] = rumps.MenuItem("(none yet)")
         else:
@@ -2120,6 +2151,10 @@ class VoiceToClaudeApp(rumps.App):
                 )
                 self.recent_menu.add(item)
 
+        self.recent_menu.add(None)  # Separator
+        self.recent_menu.add(rumps.MenuItem("Export History...", callback=self.export_history))
+        self.recent_menu.add(rumps.MenuItem("Clear History", callback=self.clear_history))
+
     def export_history(self, sender):
         """Export transcription history to a file."""
         if not self.recent_transcriptions:
@@ -2128,7 +2163,7 @@ class VoiceToClaudeApp(rumps.App):
 
         # Build export text
         lines = ["Voice to Claude - Transcription History", "=" * 40, ""]
-        for ts, full_ts, text, _ in self.recent_transcriptions:
+        for _, full_ts, text, _ in self.recent_transcriptions:
             lines.append(f"[{full_ts}]")
             lines.append(text)
             lines.append("")

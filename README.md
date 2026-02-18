@@ -60,7 +60,7 @@ The entire flow happens in under a second for short phrases.
 
 ## Features
 
-- **Push-to-Talk** — Hold Fn (Globe), Right Option, Right Command, Right Shift, or F-keys
+- **Push-to-Talk** — Hold Fn (Globe), Right/Left Option, Right Command, Right Shift, or F17-F19
 - **Floating HUD** — Visual feedback with audio bars, processing dots
 - **5 Output Modes** — Paste+Send, Paste Only, Type+Send, Type Only, Copy Only
 - **Configurable Send Key** — Enter, Ctrl+Enter, Cmd+Enter, Shift+Enter
@@ -90,7 +90,7 @@ When enabled, you can speak these commands and they'll be replaced:
 | "colon" | : |
 | "semicolon" | ; |
 | "hyphen" | - |
-| "dash" | — |
+| "dash" | - (spaced) |
 | "open quote" / "close quote" | " |
 | "open paren" / "close paren" | ( ) |
 | "ellipsis" | ... |
@@ -134,13 +134,18 @@ Settings are stored in `~/.config/voice-to-claude/config.json`:
   "model": "base",
   "ptt_key": "fn",
   "auto_send": true,
+  "output_mode": "paste_send",
   "sound_effects": true,
+  "show_notifications": true,
   "dictation_commands": true,
   "auto_capitalize": true,
   "smart_punctuation": true,
-  "send_key": "return"
+  "send_key": "return",
+  "append_mode": false
 }
 ```
+
+`output_mode` values: `paste_send`, `paste_only`, `type_send`, `type_only`, `copy_only`.
 
 All settings can be changed from the menu bar — no need to edit the file directly.
 
@@ -165,6 +170,13 @@ If the HUD or Fn key detection doesn't work:
 rm -rf venv && ./install.sh
 ```
 The `pyobjc-framework-Cocoa` and `pyobjc-framework-Quartz` packages must be installed — `install.sh` handles this automatically.
+
+### ffmpeg not found
+If transcriptions fail with `No such file or directory: 'ffmpeg'`:
+```bash
+brew install ffmpeg
+```
+Then restart the app. `install.sh` now installs `ffmpeg` automatically.
 
 ### First-run model download
 The first time you launch, Whisper downloads the model (~150 MB for base). This is a one-time download — subsequent launches are instant. The loading icon (⏳) will show until it's ready.
@@ -194,6 +206,13 @@ Logs are written to `~/.config/voice-to-claude/debug.log`.
 ```
 
 ## Changelog
+
+### v2.0.1
+- Fixed dictation command matching so words like "periodic" no longer get mutated by command replacement
+- Fixed output-mode persistence/checkmarks for non-paste modes (Type+Send, Type Only, Copy Only)
+- Hardened config writes and AppleScript escaping for notifications/text output
+- Improved debug logging around clipboard, HUD, and subprocess failures
+- Installer now ensures `ffmpeg` is installed (required by Lightning Whisper MLX)
 
 ### v2.0.0
 - **Push-to-Talk** — Complete rewrite from continuous listening to PTT mode

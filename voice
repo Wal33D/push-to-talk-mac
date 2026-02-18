@@ -1,9 +1,11 @@
 #!/bin/bash
+set -euo pipefail
+
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 VENV="$SCRIPT_DIR/venv"
 if [ ! -d "$VENV" ]; then
     echo "Virtual environment not found. Run ./install.sh first."
     exit 1
 fi
-source "$VENV/bin/activate"
+. "$VENV/bin/activate"
 exec python3 "$SCRIPT_DIR/voice_to_claude.py" "$@"
