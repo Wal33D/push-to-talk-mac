@@ -749,3 +749,7 @@ Progress marker:
    from `voice_to_claude.py` (Quartz + pynput path preserved).
 8. `TranscriptionEngine` now depends on the `TranscriptionBackend` protocol
    instead of MLX internals, with backend-injection unit tests added.
+9. macOS protocol-friendly adapters added for hotkeys/output in
+   `app/platform/macos`, and `voice_to_claude.py` now uses those adapters.
+10. macOS autostart manager adapter added at
+    `app/platform/macos/autostart.py` with unit tests.

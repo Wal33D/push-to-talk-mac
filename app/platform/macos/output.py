@@ -159,3 +159,30 @@ class OutputHandler:
         except Exception as exc:
             LOG.debug(f"Failed to show notification: {exc}")
 
+
+class MacOSOutputAutomation:
+    """Protocol-friendly adapter for macOS output automation."""
+
+    def paste_and_send(self, text, send_key="return", append=False):
+        return OutputHandler.paste_and_send(text, send_key=send_key, append=append)
+
+    def paste_only(self, text, append=False):
+        return OutputHandler.paste_only(text, append=append)
+
+    def copy_only(self, text):
+        return OutputHandler.copy_only(text)
+
+    def type_text(self, text):
+        return OutputHandler.type_text(text)
+
+    def type_and_send(self, text, send_key="return"):
+        return OutputHandler.type_and_send(text, send_key=send_key)
+
+    def play_sound(self, sound_name):
+        return OutputHandler.play_sound(sound_name)
+
+    def stop_speaking(self):
+        return OutputHandler.stop_speaking()
+
+    def show_notification(self, title, message, sound=False):
+        return OutputHandler.show_notification(title, message, sound=sound)

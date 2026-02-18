@@ -29,8 +29,8 @@ from app.core.config import load_config, save_config
 from app.core.dictation import DictationProcessor
 from app.core.state import AppState as State, STATE_DESCRIPTIONS, STATE_ICONS
 from app.core.transcription import TranscriptionEngine
-from app.platform.macos.hotkey import HAS_PYNPUT, HAS_QUARTZ, KeyListener
-from app.platform.macos.output import OutputHandler
+from app.platform.macos.hotkey import HAS_PYNPUT, HAS_QUARTZ, MacOSHotkeyProvider
+from app.platform.macos.output import MacOSOutputAutomation
 
 # Debug logging — opt-in via --debug flag or VTC_DEBUG=1 env var
 _DEBUG = ("--debug" in sys.argv) or (os.environ.get("VTC_DEBUG") == "1")
@@ -416,12 +416,12 @@ class VoiceToClaudeApp(rumps.App):
             CONFIG["model"],
             CONFIG.get("language")
         )
-        self.output_handler = OutputHandler()
+        self.output_handler = MacOSOutputAutomation()
         self.hud = FloatingHUD()
 
         # Key listener for PTT (Fn key uses Quartz, others use pynput)
         if HAS_PYNPUT or HAS_QUARTZ:
-            self.key_listener = KeyListener(
+            self.key_listener = MacOSHotkeyProvider(
                 CONFIG.get("ptt_key", "fn"),
                 self._ptt_key_pressed,
                 self._ptt_key_released,
@@ -452,7 +452,7 @@ class VoiceToClaudeApp(rumps.App):
         # PTT Key submenu
         self.ptt_key_menu = rumps.MenuItem("PTT Key")
         current_ptt_key = CONFIG.get("ptt_key", "fn")
-        for key_name, display_name in KeyListener.KEY_DISPLAY_NAMES.items():
+        for key_name, display_name in MacOSHotkeyProvider.KEY_DISPLAY_NAMES.items():
             item = rumps.MenuItem(display_name, callback=self.set_ptt_key)
             item.key_name = key_name
             if key_name == current_ptt_key:
@@ -589,7 +589,7 @@ class VoiceToClaudeApp(rumps.App):
         status_text = STATE_DESCRIPTIONS.get(state, state)
         try:
             if state == State.READY:
-                key_display = KeyListener.KEY_DISPLAY_NAMES.get(
+                key_display = MacOSHotkeyProvider.KEY_DISPLAY_NAMES.get(
                     CONFIG.get("ptt_key", "fn"), "Fn (Globe)"
                 )
                 status_text = f"PTT Ready — Hold {key_display}"

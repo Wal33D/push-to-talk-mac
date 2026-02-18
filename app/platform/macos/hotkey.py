@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import logging
 import threading
+from typing import Callable
 
 try:
     from pynput import keyboard as pynput_keyboard
@@ -199,3 +200,54 @@ class KeyListener:
             self.is_pressed = False
             self.on_release_cb()
 
+
+class MacOSHotkeyProvider:
+    """Protocol-friendly adapter around KeyListener."""
+
+    KEY_DISPLAY_NAMES = KeyListener.KEY_DISPLAY_NAMES
+
+    def __init__(
+        self,
+        key_name: str,
+        on_press_cb: Callable[[], None] | None = None,
+        on_release_cb: Callable[[], None] | None = None,
+    ):
+        self._key_name = key_name
+        self._on_press_cb = on_press_cb or (lambda: None)
+        self._on_release_cb = on_release_cb or (lambda: None)
+        self._running = False
+        self._listener = KeyListener(
+            self._key_name,
+            self._on_press_cb,
+            self._on_release_cb,
+        )
+
+    def set_handlers(self, on_press: Callable[[], None], on_release: Callable[[], None]) -> None:
+        """Register callbacks and rebuild listener with new handlers."""
+        self._on_press_cb = on_press
+        self._on_release_cb = on_release
+        was_running = self._running
+        if was_running:
+            self._listener.stop()
+        self._listener = KeyListener(
+            self._key_name,
+            self._on_press_cb,
+            self._on_release_cb,
+        )
+        if was_running:
+            self._listener.start()
+
+    def set_key(self, key_name: str) -> None:
+        """Update the configured key."""
+        self._key_name = key_name
+        self._listener.set_key(key_name)
+
+    def start(self) -> None:
+        """Start hotkey monitoring."""
+        self._listener.start()
+        self._running = True
+
+    def stop(self) -> None:
+        """Stop hotkey monitoring."""
+        self._listener.stop()
+        self._running = False

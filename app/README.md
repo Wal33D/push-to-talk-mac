@@ -12,8 +12,11 @@ Current status:
 5. MLX transcription backend is extracted to `app/stt/mlx_backend.py`.
 6. `TranscriptionEngine` is extracted to `app/core/transcription.py`.
 7. `AudioEngine` is extracted to `app/core/audio.py`.
-8. Runtime wiring still lives in `voice_to_claude.py` until extraction tasks
-   are migrated in small, testable slices.
+8. macOS hotkey/output protocol adapters are now available in
+   `app/platform/macos/`.
+9. macOS autostart manager wrapper exists in `app/platform/macos/autostart.py`.
+10. Runtime wiring still lives in `voice_to_claude.py` until extraction tasks
+    are migrated in small, testable slices.
 
 Migration order:
 1. Move platform-agnostic logic to `app/core`.
