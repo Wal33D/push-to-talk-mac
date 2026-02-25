@@ -10,7 +10,7 @@ from app.platform.macos.autostart import MacOSAutoStartManager
 class MacOSAutoStartManagerTests(unittest.TestCase):
     def test_status_is_unavailable_when_script_missing(self):
         manager = MacOSAutoStartManager(script_path="/tmp/does-not-exist-autostart-sh")
-        with self.assertLogs("vtc", level="WARNING") as logs:
+        with self.assertLogs("dictator", level="WARNING") as logs:
             status = manager.status()
         self.assertEqual(status, "unavailable")
         self.assertTrue(any("autostart script not found" in line for line in logs.output))

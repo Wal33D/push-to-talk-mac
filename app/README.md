@@ -1,7 +1,7 @@
 # App Package Scaffolding
 
 This directory is the incremental migration target from the current monolithic
-`voice_to_claude.py` implementation to a platform-adapter architecture.
+`dictator.py` implementation to a platform-adapter architecture.
 
 Current status:
 1. Base package structure is in place (`core`, `platform`, `stt`).
@@ -15,7 +15,7 @@ Current status:
 8. macOS hotkey/output protocol adapters are now available in
    `app/platform/macos/`.
 9. macOS autostart manager wrapper exists in `app/platform/macos/autostart.py`.
-10. Runtime wiring still lives in `voice_to_claude.py` until extraction tasks
+10. Runtime wiring still lives in `dictator.py` until extraction tasks
     are migrated in small, testable slices.
 
 Migration order:

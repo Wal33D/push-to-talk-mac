@@ -1,6 +1,6 @@
 #!/bin/bash
 #
-# Voice to Claude - Autostart Configuration
+# Dictator - Autostart Configuration
 #
 # Usage:
 #   ./autostart.sh enable   - Enable launch at login
@@ -11,13 +11,13 @@
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-PLIST_NAME="com.voicetoclaude.plist"
+PLIST_NAME="com.dictator.plist"
 PLIST_SRC="$SCRIPT_DIR/$PLIST_NAME"
 PLIST_DST="$HOME/Library/LaunchAgents/$PLIST_NAME"
 
 case "${1:-}" in
     enable)
-        echo "Enabling Voice to Claude autostart..."
+        echo "Enabling Dictator autostart..."
 
         # Create LaunchAgents directory if needed
         mkdir -p "$HOME/Library/LaunchAgents"
@@ -28,11 +28,11 @@ case "${1:-}" in
         # Load the agent
         launchctl load "$PLIST_DST" 2>/dev/null || true
 
-        echo "Done! Voice to Claude will now start at login."
+        echo "Done! Dictator will now start at login."
         ;;
 
     disable)
-        echo "Disabling Voice to Claude autostart..."
+        echo "Disabling Dictator autostart..."
 
         # Unload the agent
         launchctl unload "$PLIST_DST" 2>/dev/null || true
@@ -40,13 +40,13 @@ case "${1:-}" in
         # Remove the plist
         rm -f "$PLIST_DST"
 
-        echo "Done! Voice to Claude will no longer start at login."
+        echo "Done! Dictator will no longer start at login."
         ;;
 
     status)
         if [ -f "$PLIST_DST" ]; then
             echo "Autostart: ENABLED"
-            if launchctl list | grep -q "com.voicetoclaude"; then
+            if launchctl list | grep -q "com.dictator"; then
                 echo "Status: Running"
             else
                 echo "Status: Not running"

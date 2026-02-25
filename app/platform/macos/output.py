@@ -7,7 +7,7 @@ import subprocess
 
 import pyperclip
 
-LOG = logging.getLogger("vtc")
+LOG = logging.getLogger("dictator")
 
 
 def escape_applescript_string(text):

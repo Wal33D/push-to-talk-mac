@@ -6,7 +6,7 @@ import logging
 import subprocess
 from pathlib import Path
 
-LOG = logging.getLogger("vtc")
+LOG = logging.getLogger("dictator")
 
 
 class MacOSAutoStartManager:

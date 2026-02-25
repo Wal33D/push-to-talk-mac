@@ -8,4 +8,4 @@ if [ ! -d "$VENV" ]; then
     exit 1
 fi
 . "$VENV/bin/activate"
-exec python3 "$SCRIPT_DIR/voice_to_claude.py" "$@"
+exec python3 "$SCRIPT_DIR/dictator.py" "$@"

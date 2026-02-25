@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Voice to Claude - macOS Menu Bar App
+Dictator - macOS Menu Bar App
 
 A push-to-talk voice-to-text tool that lives in your menu bar.
 Hold Fn (Globe) to speak, release to transcribe and paste.
@@ -8,7 +8,7 @@ Hold Fn (Globe) to speak, release to transcribe and paste.
 Perfect for hands-free dictation to Claude Code or any text input.
 
 Usage:
-    python3 voice_to_claude.py
+    python3 dictator.py
 
 Requirements:
     - macOS (uses rumps for menu bar, AppleScript for paste)
@@ -32,11 +32,11 @@ from app.core.transcription import TranscriptionEngine
 from app.platform.macos.hotkey import HAS_PYNPUT, HAS_QUARTZ, MacOSHotkeyProvider
 from app.platform.macos.output import MacOSOutputAutomation
 
-# Debug logging — opt-in via --debug flag or VTC_DEBUG=1 env var
-_DEBUG = ("--debug" in sys.argv) or (os.environ.get("VTC_DEBUG") == "1")
+# Debug logging — opt-in via --debug flag or DICTATOR_DEBUG=1 env var
+_DEBUG = ("--debug" in sys.argv) or (os.environ.get("DICTATOR_DEBUG") == "1")
 if "--debug" in sys.argv:
     sys.argv.remove("--debug")
-_LOG_PATH = Path.home() / ".config" / "voice-to-claude" / "debug.log"
+_LOG_PATH = Path.home() / ".config" / "dictator" / "debug.log"
 _LOG_PATH.parent.mkdir(parents=True, exist_ok=True)
 logging.basicConfig(
     filename=str(_LOG_PATH) if _DEBUG else os.devnull,
@@ -44,7 +44,7 @@ logging.basicConfig(
     format="%(asctime)s [%(levelname)s] %(message)s",
     datefmt="%H:%M:%S",
 )
-log = logging.getLogger("vtc")
+log = logging.getLogger("dictator")
 
 # Set working directory for model cache
 os.chdir(os.path.expanduser("~"))
@@ -387,12 +387,12 @@ class FloatingHUD:
 # MENU BAR APPLICATION
 # ============================================================================
 
-class VoiceToClaudeApp(rumps.App):
+class DictatorApp(rumps.App):
     """Main menu bar application."""
 
     def __init__(self):
-        super(VoiceToClaudeApp, self).__init__(
-            "Voice to Claude",
+        super(DictatorApp, self).__init__(
+            "Dictator",
             icon=None,
             title=STATE_ICONS[State.LOADING]
         )
@@ -747,7 +747,7 @@ class VoiceToClaudeApp(rumps.App):
 
         if CONFIG.get("show_notifications"):
             preview = processed_text[:50] + "..." if len(processed_text) > 50 else processed_text
-            self.output_handler.show_notification("Voice to Claude", preview)
+            self.output_handler.show_notification("Dictator", preview)
 
     def toggle_pause(self, sender):
         """Toggle pause/resume PTT."""
@@ -975,7 +975,7 @@ class VoiceToClaudeApp(rumps.App):
     def show_help(self, sender):
         """Show quick help dialog."""
         rumps.alert(
-            title="Voice to Claude - Quick Help",
+            title="Dictator - Quick Help",
             message="How to use (Push-to-Talk):\n\n"
                     "1. Look for 🎤 in the menu bar (ready state)\n"
                     "2. Hold the PTT key (default: Fn/Globe)\n"
@@ -1000,7 +1000,7 @@ class VoiceToClaudeApp(rumps.App):
         total_words = CONFIG.get("total_words", 0)
 
         rumps.alert(
-            title="Voice to Claude",
+            title="Dictator",
             message=f"Version {__version__}\n"
                     f"By {__author__}\n\n"
                     f"A hands-free voice dictation tool\n"
@@ -1051,7 +1051,7 @@ class VoiceToClaudeApp(rumps.App):
             return
 
         # Build export text
-        lines = ["Voice to Claude - Transcription History", "=" * 40, ""]
+        lines = ["Dictator - Transcription History", "=" * 40, ""]
         for _, full_ts, text, _ in self.recent_transcriptions:
             lines.append(f"[{full_ts}]")
             lines.append(text)
@@ -1101,7 +1101,7 @@ class VoiceToClaudeApp(rumps.App):
         if self.last_original_text:
             pyperclip.copy(self.last_original_text)
             rumps.notification(
-                title="Voice to Claude",
+                title="Dictator",
                 subtitle="Undo",
                 message=f"Original text copied: {self.last_original_text[:30]}..."
             )
@@ -1150,7 +1150,7 @@ class VoiceToClaudeApp(rumps.App):
 # ============================================================================
 
 def main():
-    app = VoiceToClaudeApp()
+    app = DictatorApp()
     app.run()
 
 if __name__ == "__main__":

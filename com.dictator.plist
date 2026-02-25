@@ -3,11 +3,11 @@
 <plist version="1.0">
 <dict>
     <key>Label</key>
-    <string>com.voicetoclaude</string>
+    <string>com.dictator</string>
     <key>ProgramArguments</key>
     <array>
         <string>INSTALL_PATH/venv/bin/python3</string>
-        <string>INSTALL_PATH/voice_to_claude.py</string>
+        <string>INSTALL_PATH/dictator.py</string>
     </array>
     <key>WorkingDirectory</key>
     <string>INSTALL_PATH</string>
@@ -16,8 +16,8 @@
     <key>KeepAlive</key>
     <false/>
     <key>StandardOutPath</key>
-    <string>/tmp/voice-to-claude.log</string>
+    <string>/tmp/dictator.log</string>
     <key>StandardErrorPath</key>
-    <string>/tmp/voice-to-claude.err</string>
+    <string>/tmp/dictator.err</string>
 </dict>
 </plist>

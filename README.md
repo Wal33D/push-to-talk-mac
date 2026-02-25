@@ -1,4 +1,4 @@
-# Voice to Claude
+# Dictator
 
 **macOS push-to-talk voice dictation. Hold Fn to speak, release to paste. Free, local, open source.**
 
@@ -7,9 +7,9 @@
 ![Python](https://img.shields.io/badge/Python-3.9+-green)
 ![License](https://img.shields.io/badge/License-MIT-yellow)
 
-## Why Voice to Claude?
+## Why Dictator?
 
-| | Voice to Claude | Whisper Flow |
+| | Dictator | Whisper Flow |
 |---|---|---|
 | **Price** | Free forever | $8/mo after trial |
 | **Processing** | 100% local on-device | Cloud-based |
@@ -37,7 +37,7 @@ The installer handles everything: creates a virtual environment, installs depend
 
 ## How It Works
 
-Voice to Claude uses **push-to-talk** (PTT). No always-on listening, no false triggers.
+Dictator uses **push-to-talk** (PTT). No always-on listening, no false triggers.
 
 1. **Hold Fn (Globe)** — a floating HUD appears with green audio bars
 2. **Speak** — the bars react to your voice in real time
@@ -127,7 +127,7 @@ When enabled, you can speak these commands and they'll be replaced:
 
 ## Configuration
 
-Settings are stored in `~/.config/voice-to-claude/config.json`:
+Settings are stored in `~/.config/dictator/config.json`:
 
 ```json
 {
@@ -188,9 +188,9 @@ voice --debug
 ```
 Or set the environment variable:
 ```bash
-VTC_DEBUG=1 voice
+DICTATOR_DEBUG=1 voice
 ```
-Logs are written to `~/.config/voice-to-claude/debug.log`.
+Logs are written to `~/.config/dictator/debug.log`.
 
 ### Microphone not detected
 1. **System Settings → Privacy & Security → Microphone** → enable for your terminal
@@ -225,7 +225,7 @@ Logs are written to `~/.config/voice-to-claude/debug.log`.
 - **Type output modes** — Type+Send and Type Only for paste-blocking apps
 - **Append mode** — Append to clipboard instead of replacing
 - **Venv-based install** — Clean isolated environment, no system Python conflicts
-- **Debug logging opt-in** — No log file created unless `--debug` or `VTC_DEBUG=1`
+- **Debug logging opt-in** — No log file created unless `--debug` or `DICTATOR_DEBUG=1`
 - **Launcher script** — `./voice` activates venv automatically
 
 ### v1.8.1

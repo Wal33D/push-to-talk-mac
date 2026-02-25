@@ -1,2 +1,2 @@
-"""Voice to Claude application package."""
+"""Dictator application package."""
 

@@ -6,7 +6,7 @@ import json
 import logging
 from pathlib import Path
 
-CONFIG_DIR = Path.home() / ".config" / "voice-to-claude"
+CONFIG_DIR = Path.home() / ".config" / "dictator"
 CONFIG_FILE = CONFIG_DIR / "config.json"
 
 DEFAULT_CONFIG = {
@@ -37,7 +37,7 @@ DEFAULT_CONFIG = {
 
 VALID_OUTPUT_MODES = {"paste_send", "paste_only", "type_send", "type_only", "copy_only"}
 
-_LOG = logging.getLogger("vtc")
+_LOG = logging.getLogger("dictator")
 
 
 def normalize_config(config):

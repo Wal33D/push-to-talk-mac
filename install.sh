@@ -1,6 +1,6 @@
 #!/bin/bash
 #
-# Voice to Claude v2.0.1 — Installation Script
+# Dictator v2.0.1 — Installation Script
 #
 # Creates a virtual environment, installs all dependencies,
 # and sets up the `voice` command.
@@ -9,7 +9,7 @@
 set -euo pipefail
 
 echo "========================================"
-echo "  Voice to Claude v2.0.1 — Installer"
+echo "  Dictator v2.0.1 — Installer"
 echo "========================================"
 echo
 
@@ -18,7 +18,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # ── 1. Check Apple Silicon ────────────────────────────────────────────────
 ARCH="$(uname -m)"
 if [ "$ARCH" != "arm64" ]; then
-    echo "ERROR: Voice to Claude requires Apple Silicon (M1/M2/M3/M4)."
+    echo "ERROR: Dictator requires Apple Silicon (M1/M2/M3/M4)."
     echo "       Detected architecture: $ARCH"
     exit 1
 fi
@@ -96,7 +96,7 @@ ALIAS_LINE_ESCAPED="$(printf '%s\n' "$ALIAS_LINE" | sed 's/[&~\\]/\\&/g')"
 
 if ! grep -q "alias voice=" "$SHELL_RC" 2>/dev/null; then
     echo "" >> "$SHELL_RC"
-    echo "# Voice to Claude" >> "$SHELL_RC"
+    echo "# Dictator" >> "$SHELL_RC"
     echo "$ALIAS_LINE" >> "$SHELL_RC"
     echo "✓ Added 'voice' alias to $SHELL_RC"
 else
@@ -111,14 +111,14 @@ echo "========================================"
 echo "  Installation Complete!"
 echo "========================================"
 echo
-echo "To start Voice to Claude:"
+echo "To start Dictator:"
 echo "  1. Open a new terminal (or run: source $SHELL_RC)"
 echo "  2. Run: voice"
 echo "  3. Or run directly: $SCRIPT_DIR/voice"
 echo
 echo "Debug mode:"
 echo "  voice --debug"
-echo "  (logs written to ~/.config/voice-to-claude/debug.log)"
+echo "  (logs written to ~/.config/dictator/debug.log)"
 echo
 echo "IMPORTANT — macOS permissions required:"
 echo "  System Settings → Privacy & Security → Accessibility"

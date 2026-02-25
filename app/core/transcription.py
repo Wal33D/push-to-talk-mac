@@ -8,7 +8,7 @@ import re
 from app.stt.base import TranscriptionBackend
 from app.stt.mlx_backend import MlxTranscriptionBackend
 
-LOG = logging.getLogger("vtc")
+LOG = logging.getLogger("dictator")
 
 
 class TranscriptionEngine:

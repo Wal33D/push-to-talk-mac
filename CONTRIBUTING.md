@@ -1,4 +1,4 @@
-# Contributing to Voice to Claude
+# Contributing to Dictator
 
 Thank you for your interest in contributing! Here's how you can help.
 
@@ -41,7 +41,7 @@ Before submitting:
 5. Test `voice --debug` and verify log output
 6. Verify `./autostart.sh enable && ./autostart.sh status`
 7. Run local sanity checks:
-   - `PYTHONPYCACHEPREFIX=/tmp/pycache python3 -m py_compile voice_to_claude.py`
+   - `PYTHONPYCACHEPREFIX=/tmp/pycache python3 -m py_compile dictator.py`
    - `bash -n install.sh autostart.sh voice`
    - `PYTHONPYCACHEPREFIX=/tmp/pycache python3 -m unittest discover -s tests/unit -p "test_*.py"`
 
@@ -83,7 +83,7 @@ cd push-to-talk-mac
 
 # Or manually activate venv
 source venv/bin/activate
-python3 voice_to_claude.py --debug
+python3 dictator.py --debug
 ```
 
 ## Ideas for Contributions

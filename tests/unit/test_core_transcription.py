@@ -39,7 +39,7 @@ class CoreTranscriptionTests(unittest.TestCase):
         backend = StubBackend("1.5")
         engine = TranscriptionEngine(model_name="base", language="en", backend=backend)
 
-        with self.assertLogs("vtc", level="WARNING") as logs:
+        with self.assertLogs("dictator", level="WARNING") as logs:
             result = engine.transcribe("clip.wav")
 
         self.assertIsNone(result)

@@ -2,12 +2,12 @@
 
 Status: Draft v1  
 Date: 2026-02-18  
-Project: Voice to Claude (`push-to-talk-mac`)  
+Project: Dictator (`push-to-talk-mac`)  
 Primary Goal: Ship a stable Windows version without regressing macOS quality.
 
 ## 1. Executive Summary
 
-This document is the execution blueprint to add Windows support for Voice to Claude.
+This document is the execution blueprint to add Windows support for Dictator.
 
 The strategy is:
 1. Extract platform-agnostic core logic from the current monolithic macOS script.
@@ -38,7 +38,7 @@ Constraints:
 
 ## 3. Current-State Assessment (as of 2026-02-18)
 
-Current app entrypoint: `voice_to_claude.py`  
+Current app entrypoint: `dictator.py`  
 Approximate size: 2k+ lines, monolithic with mixed concerns.
 
 Current platform-coupled areas:
@@ -403,7 +403,7 @@ Because Windows cannot be fully validated in this environment, we enforce freque
 
 Required checks:
 1. Before first commit of the day:
-   1. `PYTHONPYCACHEPREFIX=/tmp/pycache python3 -m py_compile voice_to_claude.py`
+   1. `PYTHONPYCACHEPREFIX=/tmp/pycache python3 -m py_compile dictator.py`
    2. `bash -n install.sh autostart.sh voice`
 2. Before every push:
    1. Re-run syntax checks above.
@@ -734,9 +734,9 @@ Execution rule:
 
 Progress marker:
 1. Initial package/interface scaffolding now exists under `app/` to support
-   incremental extraction from `voice_to_claude.py`.
+   incremental extraction from `dictator.py`.
 2. Configuration and dictation processing have been extracted into `app/core`
-   and wired from `voice_to_claude.py` without behavior changes.
+   and wired from `dictator.py` without behavior changes.
 3. State metadata moved to `app/core/state.py` and macOS output automation moved
    to `app/platform/macos/output.py`.
 4. MLX transcription backend wrapper moved to `app/stt/mlx_backend.py` and wired
@@ -744,12 +744,12 @@ Progress marker:
 5. `TranscriptionEngine` orchestration and filtering moved to
    `app/core/transcription.py`.
 6. `AudioEngine` moved to `app/core/audio.py` and wired from
-   `voice_to_claude.py`.
+   `dictator.py`.
 7. macOS PTT hotkey handling moved to `app/platform/macos/hotkey.py` and wired
-   from `voice_to_claude.py` (Quartz + pynput path preserved).
+   from `dictator.py` (Quartz + pynput path preserved).
 8. `TranscriptionEngine` now depends on the `TranscriptionBackend` protocol
    instead of MLX internals, with backend-injection unit tests added.
 9. macOS protocol-friendly adapters added for hotkeys/output in
-   `app/platform/macos`, and `voice_to_claude.py` now uses those adapters.
+   `app/platform/macos`, and `dictator.py` now uses those adapters.
 10. macOS autostart manager adapter added at
     `app/platform/macos/autostart.py` with unit tests.

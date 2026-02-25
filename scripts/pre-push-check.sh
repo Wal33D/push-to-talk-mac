@@ -30,12 +30,12 @@ check_no_conflict_markers() {
         --glob '!.git/**' \
         --glob '!venv/**' \
         --glob '!*.min.js' \
-        --glob '!*.lock' >/tmp/vtc_conflict_markers.txt 2>/dev/null; then
-        cat /tmp/vtc_conflict_markers.txt
-        rm -f /tmp/vtc_conflict_markers.txt
+        --glob '!*.lock' >/tmp/dictator_conflict_markers.txt 2>/dev/null; then
+        cat /tmp/dictator_conflict_markers.txt
+        rm -f /tmp/dictator_conflict_markers.txt
         return 1
     fi
-    rm -f /tmp/vtc_conflict_markers.txt
+    rm -f /tmp/dictator_conflict_markers.txt
     return 0
 }
 
@@ -45,7 +45,7 @@ smoke_launch_voice() {
         return 1
     fi
 
-    local smoke_log="/tmp/vtc_pre_push_smoke.log"
+    local smoke_log="/tmp/dictator_pre_push_smoke.log"
     ./voice --debug >"$smoke_log" 2>&1 &
     local pid=$!
 
@@ -61,12 +61,12 @@ smoke_launch_voice() {
     return 0
 }
 
-print_header "Voice to Claude Pre-Push Checks"
+print_header "Dictator Pre-Push Checks"
 echo "Mode: $MODE"
 
 run_check "No merge conflict markers" check_no_conflict_markers
-run_check "Python syntax compile (voice_to_claude.py)" \
-    env PYTHONPYCACHEPREFIX=/tmp/pycache python3 -m py_compile voice_to_claude.py
+run_check "Python syntax compile (dictator.py)" \
+    env PYTHONPYCACHEPREFIX=/tmp/pycache python3 -m py_compile dictator.py
 run_check "Shell syntax (install/autostart/voice)" \
     bash -n install.sh autostart.sh voice
 run_check "Unit tests (tests/unit)" \
