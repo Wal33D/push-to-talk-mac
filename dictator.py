@@ -27,8 +27,10 @@ from datetime import datetime
 from app.core.audio import AudioEngine
 from app.core.config import load_config, save_config
 from app.core.dictation import DictationProcessor
+from app.core import history as hist
 from app.core.state import AppState as State, STATE_DESCRIPTIONS, STATE_ICONS
 from app.core.transcription import TranscriptionEngine
+from app.gui.history_window import HistoryWindow
 from app.platform.macos.hotkey import HAS_PYNPUT, HAS_QUARTZ, MacOSHotkeyProvider
 from app.platform.macos.output import MacOSOutputAutomation
 
@@ -542,6 +544,9 @@ class DictatorApp(rumps.App):
         # Undo last transcription
         self.undo_item = rumps.MenuItem("Undo Last", callback=self.undo_last)
 
+        # History window
+        self.history_item = rumps.MenuItem("View History...", callback=self.open_history)
+
         # Recent transcriptions submenu
         self.recent_menu = rumps.MenuItem("Recent Transcriptions")
         self._rebuild_recent_menu()
@@ -574,6 +579,7 @@ class DictatorApp(rumps.App):
             None,
             self.test_mic_item,
             self.undo_item,
+            self.history_item,
             self.recent_menu,
             self.stats_item,
             self.status_item,
@@ -1012,9 +1018,16 @@ class DictatorApp(rumps.App):
             ok="OK"
         )
 
+    def open_history(self, sender):
+        """Open the transcription history window."""
+        HistoryWindow.show()
+
     def add_recent_transcription(self, text):
-        """Add a transcription to the recent list."""
-        # Truncate long text
+        """Add a transcription to the recent list and persist to disk."""
+        # Persist to history file
+        hist.add(text)
+
+        # In-memory recent list for menu
         display_text = text[:50] + "..." if len(text) > 50 else text
         timestamp = datetime.now().strftime("%H:%M")
         full_timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
@@ -1022,8 +1035,9 @@ class DictatorApp(rumps.App):
         self.recent_transcriptions.insert(0, (timestamp, full_timestamp, text, display_text))
         self.recent_transcriptions = self.recent_transcriptions[:10]  # Keep last 10
 
-        # Update menu (keep export/clear at bottom)
+        # Update menu and refresh history window if open
         self._rebuild_recent_menu()
+        HistoryWindow.refresh_if_visible()
 
     def _rebuild_recent_menu(self):
         """Rebuild the recent transcriptions menu."""
@@ -1045,16 +1059,17 @@ class DictatorApp(rumps.App):
         self.recent_menu.add(rumps.MenuItem("Clear History", callback=self.clear_history))
 
     def export_history(self, sender):
-        """Export transcription history to a file."""
-        if not self.recent_transcriptions:
+        """Export full persistent transcription history to a file."""
+        all_entries = hist.get_all()
+        if not all_entries:
             rumps.alert(title="Export", message="No transcriptions to export.", ok="OK")
             return
 
         # Build export text
         lines = ["Dictator - Transcription History", "=" * 40, ""]
-        for _, full_ts, text, _ in self.recent_transcriptions:
-            lines.append(f"[{full_ts}]")
-            lines.append(text)
+        for entry in all_entries:
+            lines.append(f"[{entry.get('timestamp', '')}]")
+            lines.append(entry.get("text", ""))
             lines.append("")
 
         export_text = "\n".join(lines)
@@ -1062,13 +1077,13 @@ class DictatorApp(rumps.App):
         # Copy to clipboard and save to file
         pyperclip.copy(export_text)
 
-        export_path = Path.home() / "Desktop" / f"voice-transcriptions-{datetime.now().strftime('%Y%m%d-%H%M%S')}.txt"
+        export_path = Path.home() / "Desktop" / f"dictator-history-{datetime.now().strftime('%Y%m%d-%H%M%S')}.txt"
         try:
             with open(export_path, 'w') as f:
                 f.write(export_text)
             rumps.alert(
                 title="Export Complete",
-                message=f"Exported {len(self.recent_transcriptions)} transcriptions.\n\n"
+                message=f"Exported {len(all_entries)} transcriptions.\n\n"
                         f"Saved to: {export_path}\n"
                         f"Also copied to clipboard.",
                 ok="OK"
@@ -1081,20 +1096,23 @@ class DictatorApp(rumps.App):
             )
 
     def clear_history(self, sender):
-        """Clear transcription history."""
-        if not self.recent_transcriptions:
+        """Clear transcription history (in-memory and persistent)."""
+        total = hist.count()
+        if not self.recent_transcriptions and total == 0:
             return
 
         result = rumps.alert(
             title="Clear History",
-            message=f"Clear {len(self.recent_transcriptions)} transcriptions?",
+            message=f"Clear all {total} transcriptions?",
             ok="Clear",
             cancel="Cancel"
         )
 
         if result == 1:
             self.recent_transcriptions = []
+            hist.clear()
             self._rebuild_recent_menu()
+            HistoryWindow.refresh_if_visible()
 
     def undo_last(self, sender):
         """Copy the original (unprocessed) last transcription to clipboard."""
