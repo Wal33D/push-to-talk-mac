@@ -231,12 +231,22 @@ class DictationProcessor:
     ]
 
     @classmethod
-    def process(cls, text, enabled=True, auto_capitalize=True, smart_punctuation=True):
+    def process(cls, text, enabled=True, auto_capitalize=True, smart_punctuation=True,
+                custom_replacements=None):
         """Process text and replace dictation commands."""
         if not enabled and not auto_capitalize and not smart_punctuation:
             return text
 
         result = text
+
+        # Apply user-defined custom replacements first (highest priority)
+        if custom_replacements:
+            for trigger, replacement in sorted(custom_replacements.items(), key=lambda x: len(x[0]), reverse=True):
+                pattern = re.compile(
+                    r"(?<!\w)" + re.escape(trigger) + r"(?!\w)",
+                    re.IGNORECASE,
+                )
+                result = pattern.sub(replacement.replace("\\", "\\\\"), result)
 
         if enabled:
             # Sort commands by length (longest first) to avoid partial matches

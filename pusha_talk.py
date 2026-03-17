@@ -76,7 +76,7 @@ try:
 except ImportError:
     HAS_APPKIT = False
 
-__version__ = "2.0.1"
+__version__ = "2.1.0"
 __author__ = "Waleed Judah"
 
 # ============================================================================
@@ -107,6 +107,8 @@ if HAS_APPKIT:
             self._label_text = "Hold Fn (Globe) to speak"
             self._app_name = ""        # Focused app name during recording
             self._record_secs = 0.0    # Elapsed recording seconds
+            self._in_tail = False      # True when capturing VAD tail after release
+            self._continuous = False   # True when in continuous (double-tap) mode
             self._tick = 0
             return self
 
@@ -174,11 +176,16 @@ if HAS_APPKIT:
                 app_rect = NSMakeRect(margin, app_y, w / 2.0 - total_bar_width / 2.0 - margin - 4.0, app_size.height)
                 app_str.drawInRect_withAttributes_(app_rect, app_attrs)
 
-            # Draw audio bars centered
+            # Draw audio bars centered — green normally, amber during tail, blue in continuous
             start_x = bars_center_x - total_bar_width / 2.0
             min_bar_h = 4.0
             max_bar_h = h - 10.0
-            NSColor.colorWithCalibratedRed_green_blue_alpha_(0.3, 0.85, 0.4, 1.0).setFill()
+            if self._continuous:
+                NSColor.colorWithCalibratedRed_green_blue_alpha_(0.3, 0.6, 1.0, 1.0).setFill()
+            elif self._in_tail:
+                NSColor.colorWithCalibratedRed_green_blue_alpha_(1.0, 0.75, 0.2, 1.0).setFill()
+            else:
+                NSColor.colorWithCalibratedRed_green_blue_alpha_(0.3, 0.85, 0.4, 1.0).setFill()
 
             for i in range(num_bars):
                 level = self._audio_levels[i] if i < len(self._audio_levels) else 0.0
@@ -242,6 +249,14 @@ if HAS_APPKIT:
 
         def setRecordSecs_(self, secs):
             self._record_secs = secs
+            self.setNeedsDisplay_(True)
+
+        def setInTail_(self, flag):
+            self._in_tail = bool(flag)
+            self.setNeedsDisplay_(True)
+
+        def setContinuous_(self, flag):
+            self._continuous = bool(flag)
             self.setNeedsDisplay_(True)
 
         def setResultPreview_(self, text):
@@ -357,6 +372,14 @@ if HAS_APPKIT:
             if self._view is not None:
                 self._view.setRecordSecs_(ns_number.floatValue())
 
+        def setInTail_(self, ns_number):
+            if self._view is not None:
+                self._view.setInTail_(ns_number.boolValue())
+
+        def setContinuous_(self, ns_number):
+            if self._view is not None:
+                self._view.setContinuous_(ns_number.boolValue())
+
         def setResultPreview_(self, ns_string):
             """Show transcription result preview in the HUD."""
             if self._view is not None:
@@ -455,6 +478,24 @@ class FloatingHUD:
             'setRecordSecs:', ns_num, False
         )
 
+    def set_in_tail(self, flag):
+        """Set VAD tail indicator (bars turn amber)."""
+        if not self._enabled or self._updater is None:
+            return
+        ns_num = NSNumber.numberWithBool_(flag)
+        self._updater.performSelectorOnMainThread_withObject_waitUntilDone_(
+            'setInTail:', ns_num, False
+        )
+
+    def set_continuous(self, flag):
+        """Set continuous mode indicator (bars turn blue)."""
+        if not self._enabled or self._updater is None:
+            return
+        ns_num = NSNumber.numberWithBool_(flag)
+        self._updater.performSelectorOnMainThread_withObject_waitUntilDone_(
+            'setContinuous:', ns_num, False
+        )
+
     def set_result_preview(self, text):
         """Flash transcribed text in HUD before pasting."""
         if not self._enabled or self._updater is None:
@@ -508,6 +549,8 @@ class PushaTalkApp(rumps.App):
         self.ptt_stop_event = threading.Event()
         self.ptt_recording = False
         self.focused_app = None  # Captured on PTT press for context-aware transcription
+        self.continuous_mode = False  # Double-tap PTT to toggle continuous recording
+        self._last_press_time = 0.0  # For double-tap detection
 
         # Initialize components
         self.audio_engine = AudioEngine(CONFIG, self.set_state)
@@ -747,12 +790,34 @@ class PushaTalkApp(rumps.App):
 
     def _ptt_key_pressed(self):
         """Called when PTT key is pressed down."""
+        import time as _time
+        now = _time.time()
+
+        # If in continuous mode, any press stops it
+        if self.continuous_mode:
+            self.continuous_mode = False
+            self.ptt_stop_event.set()
+            if CONFIG.get("sound_effects"):
+                threading.Thread(
+                    target=lambda: self.output_handler.play_sound("Blow"),
+                    daemon=True
+                ).start()
+            return
+
         if self.ptt_recording or self.paused:
             return
         if self.state == State.LOADING:
             return
+
+        # Double-tap detection: two presses within 400ms → continuous mode
+        double_tap = (now - self._last_press_time) < 0.4
+        self._last_press_time = now
+
         self.ptt_recording = True
         self.ptt_stop_event.clear()
+
+        if double_tap:
+            self.continuous_mode = True
 
         # Capture focused app before recording starts (for context-aware transcription)
         self.focused_app = FocusedAppContext.get_focused_app()
@@ -763,8 +828,9 @@ class PushaTalkApp(rumps.App):
 
         # Play a ding sound when PTT key is pressed
         if CONFIG.get("sound_effects"):
+            sound = "Morse" if self.continuous_mode else "Tink"
             threading.Thread(
-                target=lambda: self.output_handler.play_sound("Tink"),
+                target=lambda: self.output_handler.play_sound(sound),
                 daemon=True
             ).start()
 
@@ -774,6 +840,9 @@ class PushaTalkApp(rumps.App):
 
     def _ptt_key_released(self):
         """Called when PTT key is released."""
+        if self.continuous_mode:
+            return  # In continuous mode, release doesn't stop recording
+
         self.ptt_stop_event.set()
 
         # Haptic feedback on release
@@ -790,11 +859,14 @@ class PushaTalkApp(rumps.App):
                 if app_name == "Unknown":
                     app_name = ""
             self.hud.set_recording(app_name)
+            if self.continuous_mode:
+                self.hud.set_continuous(True)
 
             audio_file = self.audio_engine.record_until_released(
                 self.ptt_stop_event,
                 level_callback=self.hud.update_audio_level,
                 time_callback=self.hud.update_record_time,
+                tail_callback=self.hud.set_in_tail,
             )
 
             log.info(f"record_until_released returned: {audio_file}")
@@ -837,8 +909,10 @@ class PushaTalkApp(rumps.App):
                     log.debug(f"Failed to remove temp audio file: {exc}")
 
                 if text:
-                    # Flash transcription preview in HUD for 0.75s
-                    self.hud.set_result_preview(text)
+                    # Flash transcription preview in HUD with word count
+                    word_count = len(text.split())
+                    preview = f"{text} ({word_count}w)"
+                    self.hud.set_result_preview(preview)
                     threading.Event().wait(0.75)
 
                     self._output_text(text)
@@ -850,6 +924,9 @@ class PushaTalkApp(rumps.App):
             log.error(f"PTT error: {e}", exc_info=True)
         finally:
             self.ptt_recording = False
+            self.continuous_mode = False
+            self.hud.set_in_tail(False)
+            self.hud.set_continuous(False)
             self.set_state(State.READY)
 
     def _output_text(self, text):
@@ -884,7 +961,8 @@ class PushaTalkApp(rumps.App):
                 text,
                 enabled=CONFIG.get("dictation_commands", True),
                 auto_capitalize=CONFIG.get("auto_capitalize", True),
-                smart_punctuation=CONFIG.get("smart_punctuation", True)
+                smart_punctuation=CONFIG.get("smart_punctuation", True),
+                custom_replacements=CONFIG.get("custom_replacements") or None,
             )
             self.last_processed_text = processed_text
             self.undo_stack.append((text, processed_text))

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import array
+import struct
 import tempfile
 import wave
 
@@ -48,7 +49,36 @@ class AudioEngine:
         audio_data = array.array("h", data)
         return max(abs(sample) for sample in audio_data) if audio_data else 0
 
-    def record_until_released(self, stop_event, level_callback=None, time_callback=None):
+    @staticmethod
+    def get_rms_level(frames):
+        """Calculate RMS energy across all frames."""
+        all_data = b"".join(frames)
+        if len(all_data) < 2:
+            return 0
+        samples = array.array("h", all_data)
+        if not samples:
+            return 0
+        sum_sq = sum(s * s for s in samples)
+        return int((sum_sq / len(samples)) ** 0.5)
+
+    @staticmethod
+    def normalize_audio(frames, target_peak=24000):
+        """Normalize audio to a target peak level for consistent Whisper input."""
+        all_data = b"".join(frames)
+        if len(all_data) < 2:
+            return frames
+        samples = array.array("h", all_data)
+        peak = max(abs(s) for s in samples) if samples else 0
+        if peak < 100 or peak >= target_peak:
+            return frames  # Too quiet (noise) or already loud enough
+        scale = target_peak / peak
+        normalized = array.array("h", [max(-32768, min(32767, int(s * scale))) for s in samples])
+        norm_bytes = normalized.tobytes()
+        # Re-chunk to original frame sizes
+        chunk_size = len(frames[0]) if frames else len(norm_bytes)
+        return [norm_bytes[i:i + chunk_size] for i in range(0, len(norm_bytes), chunk_size)]
+
+    def record_until_released(self, stop_event, level_callback=None, time_callback=None, tail_callback=None):
         """Record audio until stop_event is set (key released). For PTT mode."""
         p = pyaudio.PyAudio()
 
@@ -130,6 +160,8 @@ class AudioEngine:
                     released = True
                     tail_chunks_elapsed = 0
                     silence_remaining = silence_countdown_chunks
+                    if tail_callback is not None:
+                        tail_callback(True)
 
                 # Energy-based VAD tail after key release
                 if released:
@@ -156,6 +188,16 @@ class AudioEngine:
         min_useful_chunks = int(0.3 * rate / chunk)
         if total_chunks < min_useful_chunks:
             return None
+
+        # Noise gate — skip if audio was just ambient noise
+        rms = self.get_rms_level(frames)
+        noise_gate = self.config.get("noise_gate", 150)
+        if rms < noise_gate:
+            print(f"PTT: Audio below noise gate (RMS {rms} < {noise_gate}), skipping")
+            return None
+
+        # Normalize audio levels for consistent Whisper input
+        frames = self.normalize_audio(frames)
 
         # Save to temp file
         try:
