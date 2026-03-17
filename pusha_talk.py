@@ -291,9 +291,13 @@ if HAS_APPKIT:
             screen_frame = screen.frame()
             hud_w = 300.0
             hud_h = 36.0
-            bottom_margin = 20.0
+            margin = 20.0
             x = (screen_frame.size.width - hud_w) / 2.0
-            y = bottom_margin
+            hud_pos = CONFIG.get("hud_position", "bottom")
+            if hud_pos == "top":
+                y = screen_frame.size.height - hud_h - margin - 30  # 30 for menu bar
+            else:
+                y = margin
 
             panel = NSPanel.alloc().initWithContentRect_styleMask_backing_defer_(
                 NSMakeRect(x, y, hud_w, hud_h),
@@ -693,6 +697,19 @@ class PushaTalkApp(rumps.App):
         self.auto_output_item = rumps.MenuItem("Auto Output Mode", callback=self.toggle_auto_output_mode)
         self.auto_output_item.state = 1 if CONFIG.get("auto_output_mode", False) else 0
 
+        # HUD position submenu
+        self.hud_pos_menu = rumps.MenuItem("HUD Position")
+        current_pos = CONFIG.get("hud_position", "bottom")
+        for pos_name, pos_val in [("Bottom", "bottom"), ("Top", "top")]:
+            item = rumps.MenuItem(pos_name, callback=self.set_hud_position)
+            item.pos_value = pos_val
+            if pos_val == current_pos:
+                item.state = 1
+            self.hud_pos_menu.add(item)
+
+        # Save per-app config
+        self.save_app_config_item = rumps.MenuItem("Save Config for Current App", callback=self.save_per_app_config)
+
         # Input device submenu
         self.device_menu = rumps.MenuItem("Input Device")
         self._populate_device_menu()
@@ -736,6 +753,8 @@ class PushaTalkApp(rumps.App):
             self.haptic_item,
             self.context_item,
             self.auto_output_item,
+            self.hud_pos_menu,
+            self.save_app_config_item,
             None,
             self.test_mic_item,
             self.undo_item,
@@ -751,7 +770,10 @@ class PushaTalkApp(rumps.App):
     def set_state(self, state):
         """Update current state and menu bar icon."""
         self.state = state
-        self.title = STATE_ICONS.get(state, "🎤")
+        icon = STATE_ICONS.get(state, "🎤")
+        if state == State.SPEAKING and self.continuous_mode:
+            icon = "🔴"  # Red dot for continuous mode
+        self.title = icon
         status_text = STATE_DESCRIPTIONS.get(state, state)
         try:
             if state == State.READY:
@@ -949,6 +971,44 @@ class PushaTalkApp(rumps.App):
                 self.output_handler.play_sound("Basso")
             return
 
+        elif control_cmd == "COPY":
+            # Copy the last transcription to clipboard (no paste)
+            if self.last_processed_text:
+                self.output_handler.copy_only(self.last_processed_text)
+                if CONFIG.get("sound_effects"):
+                    self.output_handler.play_sound("Pop")
+            return
+
+        elif control_cmd == "UPPERCASE":
+            # Transform last transcription to ALL CAPS and re-paste
+            if self.last_processed_text:
+                processed_text = self.last_processed_text.upper()
+                self.last_processed_text = processed_text
+            else:
+                return
+
+        elif control_cmd == "LOWERCASE":
+            if self.last_processed_text:
+                processed_text = self.last_processed_text.lower()
+                self.last_processed_text = processed_text
+            else:
+                return
+
+        elif control_cmd == "TITLECASE":
+            if self.last_processed_text:
+                processed_text = self.last_processed_text.title()
+                self.last_processed_text = processed_text
+            else:
+                return
+
+        elif control_cmd == "SELECT_ALL":
+            script = 'tell application "System Events" to keystroke "a" using command down'
+            try:
+                subprocess.run(['osascript', '-e', script], capture_output=True, timeout=2)
+            except Exception as exc:
+                log.debug(f"Failed to select all: {exc}")
+            return
+
         elif control_cmd == "REPEAT":
             if self.last_processed_text:
                 processed_text = self.last_processed_text
@@ -975,22 +1035,26 @@ class PushaTalkApp(rumps.App):
         self.update_stats(processed_text)
         self.add_recent_transcription(processed_text)
 
-        # Output based on mode — optionally auto-select based on focused app
+        # Output based on mode — check per-app config, then auto-select
         output_mode = CONFIG.get("output_mode", "paste_send")
         send_key = CONFIG.get("send_key", "return")
         append_mode = CONFIG.get("append_mode", False)
         clipboard_restore = CONFIG.get("clipboard_restore", True)
 
-        if CONFIG.get("auto_output_mode", False) and self.focused_app:
+        # Per-app config overrides (user-learned preferences per app)
+        if self.focused_app:
             bundle_id = self.focused_app.get("bundle_id", "")
-            recommended = FocusedAppContext.get_recommended_send_key(bundle_id)
-            if recommended is None:
-                # Editor/terminal — paste only, don't send
-                output_mode = "paste_only"
-            elif recommended == "return":
-                # Messaging — paste + send with Enter
-                output_mode = "paste_send"
-                send_key = "return"
+            per_app = CONFIG.get("per_app_config", {}).get(bundle_id)
+            if per_app:
+                output_mode = per_app.get("output_mode", output_mode)
+                send_key = per_app.get("send_key", send_key)
+            elif CONFIG.get("auto_output_mode", False):
+                recommended = FocusedAppContext.get_recommended_send_key(bundle_id)
+                if recommended is None:
+                    output_mode = "paste_only"
+                elif recommended == "return":
+                    output_mode = "paste_send"
+                    send_key = "return"
 
         if output_mode == "paste_send":
             self.output_handler.paste_and_send(processed_text, send_key, append_mode, clipboard_restore)
@@ -1135,6 +1199,37 @@ class PushaTalkApp(rumps.App):
         sender.state = 1 if CONFIG["auto_output_mode"] else 0
         save_config(CONFIG)
 
+    def set_hud_position(self, sender):
+        """Change HUD position (requires restart to take effect)."""
+        pos_value = getattr(sender, 'pos_value', 'bottom')
+        CONFIG["hud_position"] = pos_value
+        save_config(CONFIG)
+        for item in self.hud_pos_menu.values():
+            item.state = 1 if getattr(item, 'pos_value', None) == pos_value else 0
+
+    def save_per_app_config(self, sender):
+        """Save current output mode and send key for the focused app."""
+        app_info = FocusedAppContext.get_focused_app()
+        bundle_id = app_info.get("bundle_id", "")
+        app_name = app_info.get("name", "Unknown")
+        if not bundle_id:
+            rumps.alert(title="Per-App Config", message="Could not detect focused app.", ok="OK")
+            return
+        per_app = CONFIG.get("per_app_config", {})
+        per_app[bundle_id] = {
+            "output_mode": CONFIG.get("output_mode", "paste_send"),
+            "send_key": CONFIG.get("send_key", "return"),
+        }
+        CONFIG["per_app_config"] = per_app
+        save_config(CONFIG)
+        rumps.alert(
+            title="Per-App Config Saved",
+            message=f"Saved for {app_name}:\n"
+                    f"  Output: {CONFIG.get('output_mode')}\n"
+                    f"  Send key: {CONFIG.get('send_key')}",
+            ok="OK"
+        )
+
     def set_language(self, sender):
         """Set transcription language."""
         lang_code = getattr(sender, 'language_code', None)
@@ -1261,21 +1356,25 @@ class PushaTalkApp(rumps.App):
         """Show quick help dialog."""
         rumps.alert(
             title="Pusha Talk - Quick Help",
-            message="How to use (Push-to-Talk):\n\n"
-                    "1. Look for 🎤 in the menu bar (ready state)\n"
-                    "2. Hold the PTT key (default: Fn/Globe)\n"
-                    "3. Speak while holding the key\n"
-                    "4. Release to transcribe and paste\n\n"
-                    "Icon states:\n"
-                    "  🎤 Ready — hold PTT key to speak\n"
-                    "  🗣 Recording — capturing speech\n"
-                    "  ⚙️ Processing — transcribing\n"
-                    "  ⏸ Paused — click to resume\n\n"
-                    "Tips:\n"
-                    "  • Say 'period', 'comma', 'new line'\n"
-                    "  • Change PTT key in the PTT Key menu\n"
-                    "  • Use Pause/Resume to disable PTT\n\n"
-                    "For full docs: github.com/Wal33D/push-to-talk-mac",
+            message="Push-to-Talk:\n"
+                    "  Hold PTT key → speak → release\n"
+                    "  Double-tap PTT → continuous mode (press to stop)\n\n"
+                    "Voice Commands:\n"
+                    "  'period' 'comma' 'new line' 'new paragraph'\n"
+                    "  'scratch that' — undo last paste\n"
+                    "  'copy that' — copy last to clipboard\n"
+                    "  'all caps that' / 'lowercase that' / 'title case that'\n"
+                    "  'repeat that' — re-paste last transcription\n"
+                    "  'select all' — Cmd+A\n\n"
+                    "HUD Colors:\n"
+                    "  Green bars — recording\n"
+                    "  Amber bars — capturing trailing speech\n"
+                    "  Blue bars — continuous mode\n\n"
+                    "Pro Tips:\n"
+                    "  • Save per-app config (output mode per app)\n"
+                    "  • Enable Auto Output Mode for smart send\n"
+                    "  • Add custom replacements in config.json\n\n"
+                    "github.com/Wal33D/push-to-talk-mac",
             ok="Got it"
         )
 

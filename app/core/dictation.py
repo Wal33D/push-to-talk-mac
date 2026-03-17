@@ -112,6 +112,12 @@ class DictationProcessor:
         "cancel that": "CANCEL",
         "repeat that": "REPEAT",
         "say that again": "REPEAT",
+        "copy that": "COPY",
+        "all caps that": "UPPERCASE",
+        "uppercase that": "UPPERCASE",
+        "lowercase that": "LOWERCASE",
+        "title case that": "TITLECASE",
+        "select all": "SELECT_ALL",
     }
 
     # Commands that should remove preceding space

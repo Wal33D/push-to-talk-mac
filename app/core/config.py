@@ -41,6 +41,8 @@ DEFAULT_CONFIG = {
     "vad_tail_max": 1.5,  # Max seconds to continue recording after key release
     "auto_output_mode": False,  # Auto-select output mode based on focused app
     "noise_gate": 150,  # RMS threshold below which audio is considered ambient noise
+    "per_app_config": {},  # Per-app overrides: {"bundle_id": {"output_mode": "...", "send_key": "..."}}
+    "hud_position": "bottom",  # HUD position: "bottom" or "top"
 }
 
 VALID_OUTPUT_MODES = {"paste_send", "paste_only", "type_send", "type_only", "copy_only"}
