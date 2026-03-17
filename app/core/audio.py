@@ -48,7 +48,7 @@ class AudioEngine:
         audio_data = array.array("h", data)
         return max(abs(sample) for sample in audio_data) if audio_data else 0
 
-    def record_until_released(self, stop_event, level_callback=None):
+    def record_until_released(self, stop_event, level_callback=None, time_callback=None):
         """Record audio until stop_event is set (key released). For PTT mode."""
         p = pyaudio.PyAudio()
 
@@ -117,6 +117,9 @@ class AudioEngine:
                 level = self.get_audio_level(data)
                 if level_callback is not None:
                     level_callback(level)
+                if time_callback is not None and total_chunks % 5 == 0:
+                    elapsed = total_chunks * chunk / rate
+                    time_callback(elapsed)
 
                 # Don't check stop_event until we've recorded the minimum
                 if total_chunks < min_record_chunks:

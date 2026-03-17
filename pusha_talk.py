@@ -96,7 +96,7 @@ CONFIG = load_config()
 if HAS_APPKIT:
 
     class HUDBarView(NSView):
-        """Custom NSView that draws the floating HUD pill with three states."""
+        """Custom NSView that draws the floating HUD pill with visual states."""
 
         def initWithFrame_(self, frame):
             self = objc.super(HUDBarView, self).initWithFrame_(frame)
@@ -105,6 +105,8 @@ if HAS_APPKIT:
             self._state = "idle"       # idle / recording / processing
             self._audio_levels = [0.0] * 12
             self._label_text = "Hold Fn (Globe) to speak"
+            self._app_name = ""        # Focused app name during recording
+            self._record_secs = 0.0    # Elapsed recording seconds
             self._tick = 0
             return self
 
@@ -146,15 +148,36 @@ if HAS_APPKIT:
             text.drawInRect_withAttributes_(text_rect, attrs)
 
         def _draw_audio_bars(self, w, h):
-            """Draw 12 vertical audio bars that respond to mic levels."""
-            num_bars = 12
-            bar_width = 4.0
-            bar_gap = 3.0
+            """Draw app name, audio bars, and elapsed timer."""
+            num_bars = 9
+            bar_width = 3.5
+            bar_gap = 2.5
             total_bar_width = num_bars * bar_width + (num_bars - 1) * bar_gap
-            start_x = (w - total_bar_width) / 2.0
+
+            # Layout: [app_label] [bars] [timer]
+            margin = 14.0
+            timer_w = 36.0
+            bars_center_x = w / 2.0
+
+            # Draw app name on the left
+            if self._app_name:
+                app_str = NSString.stringWithString_(self._app_name)
+                style = NSMutableParagraphStyle.alloc().init()
+                style.setAlignment_(NSTextAlignmentCenter)
+                app_attrs = {
+                    NSFontAttributeName: NSFont.systemFontOfSize_(9.0),
+                    NSForegroundColorAttributeName: NSColor.colorWithCalibratedRed_green_blue_alpha_(0.7, 0.7, 0.7, 0.9),
+                    NSParagraphStyleAttributeName: style,
+                }
+                app_size = app_str.sizeWithAttributes_(app_attrs)
+                app_y = (h - app_size.height) / 2.0
+                app_rect = NSMakeRect(margin, app_y, w / 2.0 - total_bar_width / 2.0 - margin - 4.0, app_size.height)
+                app_str.drawInRect_withAttributes_(app_rect, app_attrs)
+
+            # Draw audio bars centered
+            start_x = bars_center_x - total_bar_width / 2.0
             min_bar_h = 4.0
             max_bar_h = h - 10.0
-
             NSColor.colorWithCalibratedRed_green_blue_alpha_(0.3, 0.85, 0.4, 1.0).setFill()
 
             for i in range(num_bars):
@@ -167,6 +190,22 @@ if HAS_APPKIT:
                     bar_rect, bar_width / 2.0, bar_width / 2.0
                 )
                 bar_path.fill()
+
+            # Draw elapsed timer on the right
+            secs = self._record_secs
+            timer_text = f"{int(secs)}s" if secs < 60 else f"{int(secs // 60)}:{int(secs % 60):02d}"
+            timer_str = NSString.stringWithString_(timer_text)
+            style2 = NSMutableParagraphStyle.alloc().init()
+            style2.setAlignment_(NSTextAlignmentCenter)
+            timer_attrs = {
+                NSFontAttributeName: NSFont.monospacedDigitSystemFontOfSize_weight_(10.0, 0.0),
+                NSForegroundColorAttributeName: NSColor.colorWithCalibratedRed_green_blue_alpha_(0.6, 0.9, 0.6, 0.9),
+                NSParagraphStyleAttributeName: style2,
+            }
+            timer_size = timer_str.sizeWithAttributes_(timer_attrs)
+            timer_y = (h - timer_size.height) / 2.0
+            timer_rect = NSMakeRect(w - margin - timer_w, timer_y, timer_w, timer_size.height)
+            timer_str.drawInRect_withAttributes_(timer_rect, timer_attrs)
 
         def _draw_processing_dots(self, w, h):
             """Draw 3 pulsing dots for processing state."""
@@ -197,10 +236,18 @@ if HAS_APPKIT:
             self._label_text = label
             self.setNeedsDisplay_(True)
 
+        def setAppName_(self, name):
+            self._app_name = name
+            self.setNeedsDisplay_(True)
+
+        def setRecordSecs_(self, secs):
+            self._record_secs = secs
+            self.setNeedsDisplay_(True)
+
         def setResultPreview_(self, text):
             """Temporarily show transcription result text in the HUD."""
             self._state = "idle"
-            self._label_text = text if len(text) <= 35 else text[:32] + "..."
+            self._label_text = text if len(text) <= 45 else text[:42] + "..."
             self.setNeedsDisplay_(True)
 
         def animationTick(self):
@@ -227,7 +274,7 @@ if HAS_APPKIT:
             if screen is None:
                 return
             screen_frame = screen.frame()
-            hud_w = 220.0
+            hud_w = 300.0
             hud_h = 36.0
             bottom_margin = 20.0
             x = (screen_frame.size.width - hud_w) / 2.0
@@ -300,6 +347,16 @@ if HAS_APPKIT:
             if self._view is not None:
                 self._view.animationTick()
 
+        def setAppName_(self, ns_string):
+            """Set the focused app name in the HUD."""
+            if self._view is not None:
+                self._view.setAppName_(str(ns_string))
+
+        def setRecordSecs_(self, ns_number):
+            """Update elapsed recording seconds."""
+            if self._view is not None:
+                self._view.setRecordSecs_(ns_number.floatValue())
+
         def setResultPreview_(self, ns_string):
             """Show transcription result preview in the HUD."""
             if self._view is not None:
@@ -322,7 +379,7 @@ class FloatingHUD:
     performSelectorOnMainThread to ensure thread safety.
     """
 
-    HUD_WIDTH = 220
+    HUD_WIDTH = 300
     HUD_HEIGHT = 36
     BOTTOM_MARGIN = 20
     NUM_BARS = 12
@@ -351,7 +408,7 @@ class FloatingHUD:
             'setState:', info, False
         )
 
-    def set_recording(self):
+    def set_recording(self, app_name=""):
         if not self._enabled or self._updater is None:
             return
         info = NSDictionary.dictionaryWithDictionary_({
@@ -361,6 +418,12 @@ class FloatingHUD:
         self._updater.performSelectorOnMainThread_withObject_waitUntilDone_(
             'setState:', info, False
         )
+        if app_name:
+            from Foundation import NSString as _NSString
+            ns_str = _NSString.stringWithString_(app_name)
+            self._updater.performSelectorOnMainThread_withObject_waitUntilDone_(
+                'setAppName:', ns_str, False
+            )
 
     def set_processing(self):
         if not self._enabled or self._updater is None:
@@ -381,6 +444,15 @@ class FloatingHUD:
         ns_num = NSNumber.numberWithFloat_(normalized)
         self._updater.performSelectorOnMainThread_withObject_waitUntilDone_(
             'updateLevel:', ns_num, False
+        )
+
+    def update_record_time(self, seconds):
+        """Update elapsed recording time in the HUD."""
+        if not self._enabled or self._updater is None:
+            return
+        ns_num = NSNumber.numberWithFloat_(float(seconds))
+        self._updater.performSelectorOnMainThread_withObject_waitUntilDone_(
+            'setRecordSecs:', ns_num, False
         )
 
     def set_result_preview(self, text):
@@ -430,6 +502,7 @@ class PushaTalkApp(rumps.App):
         self.recent_transcriptions = []
         self.last_original_text = None  # For undo feature
         self.last_processed_text = None
+        self.undo_stack = []  # Last 5 (original, processed) pairs
 
         # Push-to-Talk state
         self.ptt_stop_event = threading.Event()
@@ -573,6 +646,10 @@ class PushaTalkApp(rumps.App):
         self.context_item = rumps.MenuItem("Context-Aware", callback=self.toggle_context_aware)
         self.context_item.state = 1 if CONFIG.get("context_aware", True) else 0
 
+        # Auto output mode toggle
+        self.auto_output_item = rumps.MenuItem("Auto Output Mode", callback=self.toggle_auto_output_mode)
+        self.auto_output_item.state = 1 if CONFIG.get("auto_output_mode", False) else 0
+
         # Input device submenu
         self.device_menu = rumps.MenuItem("Input Device")
         self._populate_device_menu()
@@ -615,6 +692,7 @@ class PushaTalkApp(rumps.App):
             self.clipboard_restore_item,
             self.haptic_item,
             self.context_item,
+            self.auto_output_item,
             None,
             self.test_mic_item,
             self.undo_item,
@@ -641,7 +719,7 @@ class PushaTalkApp(rumps.App):
                 self.hud.set_idle(key_display)
                 self.hud.show()
             elif state == State.SPEAKING:
-                self.hud.set_recording()
+                pass  # HUD is set in _ptt_record_and_transcribe with app name
             elif state == State.PROCESSING:
                 self.hud.set_processing()
             elif state == State.PAUSED:
@@ -705,8 +783,18 @@ class PushaTalkApp(rumps.App):
     def _ptt_record_and_transcribe(self):
         """Record while key held, then transcribe and output. Runs in daemon thread."""
         try:
+            # Show app name in HUD during recording
+            app_name = ""
+            if self.focused_app:
+                app_name = self.focused_app.get("name", "")
+                if app_name == "Unknown":
+                    app_name = ""
+            self.hud.set_recording(app_name)
+
             audio_file = self.audio_engine.record_until_released(
-                self.ptt_stop_event, level_callback=self.hud.update_audio_level
+                self.ptt_stop_event,
+                level_callback=self.hud.update_audio_level,
+                time_callback=self.hud.update_record_time,
             )
 
             log.info(f"record_until_released returned: {audio_file}")
@@ -724,8 +812,17 @@ class PushaTalkApp(rumps.App):
                 initial_prompt = None
                 if CONFIG.get("context_aware", True) and self.focused_app:
                     app_name = self.focused_app.get("name", "")
+                    bundle_id = self.focused_app.get("bundle_id", "")
                     if app_name and app_name != "Unknown":
-                        initial_prompt = f"Dictating in {app_name}."
+                        category = FocusedAppContext.get_app_category(bundle_id)
+                        if category == "messaging":
+                            initial_prompt = f"Dictating a chat message in {app_name}. Casual, conversational tone."
+                        elif category == "editor" or category == "terminal":
+                            initial_prompt = f"Dictating in {app_name}. Technical context, code terminology expected."
+                        elif category == "browser":
+                            initial_prompt = f"Dictating in {app_name}. Web browsing context."
+                        else:
+                            initial_prompt = f"Dictating in {app_name}."
                         log.info(f"Context prompt: {initial_prompt}")
 
                 log.info("Starting transcription...")
@@ -742,8 +839,7 @@ class PushaTalkApp(rumps.App):
                 if text:
                     # Flash transcription preview in HUD for 0.75s
                     self.hud.set_result_preview(text)
-                    import time
-                    time.sleep(0.75)
+                    threading.Event().wait(0.75)
 
                     self._output_text(text)
                 else:
@@ -791,6 +887,9 @@ class PushaTalkApp(rumps.App):
                 smart_punctuation=CONFIG.get("smart_punctuation", True)
             )
             self.last_processed_text = processed_text
+            self.undo_stack.append((text, processed_text))
+            if len(self.undo_stack) > 5:
+                self.undo_stack.pop(0)
 
         self.set_state(State.SENDING)
 
@@ -798,11 +897,22 @@ class PushaTalkApp(rumps.App):
         self.update_stats(processed_text)
         self.add_recent_transcription(processed_text)
 
-        # Output based on mode
+        # Output based on mode — optionally auto-select based on focused app
         output_mode = CONFIG.get("output_mode", "paste_send")
         send_key = CONFIG.get("send_key", "return")
         append_mode = CONFIG.get("append_mode", False)
         clipboard_restore = CONFIG.get("clipboard_restore", True)
+
+        if CONFIG.get("auto_output_mode", False) and self.focused_app:
+            bundle_id = self.focused_app.get("bundle_id", "")
+            recommended = FocusedAppContext.get_recommended_send_key(bundle_id)
+            if recommended is None:
+                # Editor/terminal — paste only, don't send
+                output_mode = "paste_only"
+            elif recommended == "return":
+                # Messaging — paste + send with Enter
+                output_mode = "paste_send"
+                send_key = "return"
 
         if output_mode == "paste_send":
             self.output_handler.paste_and_send(processed_text, send_key, append_mode, clipboard_restore)
@@ -939,6 +1049,12 @@ class PushaTalkApp(rumps.App):
         """Toggle context-aware transcription (sends app name to Whisper)."""
         CONFIG["context_aware"] = not CONFIG.get("context_aware", True)
         sender.state = 1 if CONFIG["context_aware"] else 0
+        save_config(CONFIG)
+
+    def toggle_auto_output_mode(self, sender):
+        """Toggle auto output mode (selects paste/send behavior based on focused app)."""
+        CONFIG["auto_output_mode"] = not CONFIG.get("auto_output_mode", False)
+        sender.state = 1 if CONFIG["auto_output_mode"] else 0
         save_config(CONFIG)
 
     def set_language(self, sender):
@@ -1200,16 +1316,20 @@ class PushaTalkApp(rumps.App):
             HistoryWindow.refresh_if_visible()
 
     def undo_last(self, sender):
-        """Copy the original (unprocessed) last transcription to clipboard."""
-        if self.last_original_text:
-            pyperclip.copy(self.last_original_text)
+        """Pop the last transcription from undo stack and copy original text."""
+        if self.undo_stack:
+            original, processed = self.undo_stack.pop()
+            pyperclip.copy(original)
+            self.last_original_text = self.undo_stack[-1][0] if self.undo_stack else None
+            self.last_processed_text = self.undo_stack[-1][1] if self.undo_stack else None
+            remaining = len(self.undo_stack)
             rumps.notification(
                 title="Pusha Talk",
-                subtitle="Undo",
-                message=f"Original text copied: {self.last_original_text[:30]}..."
+                subtitle=f"Undo ({remaining} remaining)",
+                message=f"Original: {original[:40]}..."
             )
         else:
-            rumps.alert(title="Undo", message="No transcription to undo.", ok="OK")
+            rumps.alert(title="Undo", message="Nothing to undo.", ok="OK")
 
     def update_stats(self, text):
         """Update session statistics."""
