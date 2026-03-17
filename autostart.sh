@@ -1,6 +1,6 @@
 #!/bin/bash
 #
-# Dictator - Autostart Configuration
+# Pusha Talk - Autostart Configuration
 #
 # Usage:
 #   ./autostart.sh enable   - Enable launch at login
@@ -11,13 +11,13 @@
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-PLIST_NAME="com.dictator.plist"
+PLIST_NAME="com.pushatalk.plist"
 PLIST_SRC="$SCRIPT_DIR/$PLIST_NAME"
 PLIST_DST="$HOME/Library/LaunchAgents/$PLIST_NAME"
 
 case "${1:-}" in
     enable)
-        echo "Enabling Dictator autostart..."
+        echo "Enabling Pusha Talk autostart..."
 
         # Create LaunchAgents directory if needed
         mkdir -p "$HOME/Library/LaunchAgents"
@@ -28,11 +28,11 @@ case "${1:-}" in
         # Load the agent
         launchctl load "$PLIST_DST" 2>/dev/null || true
 
-        echo "Done! Dictator will now start at login."
+        echo "Done! Pusha Talk will now start at login."
         ;;
 
     disable)
-        echo "Disabling Dictator autostart..."
+        echo "Disabling Pusha Talk autostart..."
 
         # Unload the agent
         launchctl unload "$PLIST_DST" 2>/dev/null || true
@@ -40,13 +40,13 @@ case "${1:-}" in
         # Remove the plist
         rm -f "$PLIST_DST"
 
-        echo "Done! Dictator will no longer start at login."
+        echo "Done! Pusha Talk will no longer start at login."
         ;;
 
     status)
         if [ -f "$PLIST_DST" ]; then
             echo "Autostart: ENABLED"
-            if launchctl list | grep -q "com.dictator"; then
+            if launchctl list | grep -q "com.pushatalk"; then
                 echo "Status: Running"
             else
                 echo "Status: Not running"

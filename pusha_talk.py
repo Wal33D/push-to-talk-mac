@@ -1,14 +1,14 @@
 #!/usr/bin/env python3
 """
-Dictator - macOS Menu Bar App
+Pusha Talk - macOS Menu Bar App
 
 A push-to-talk voice-to-text tool that lives in your menu bar.
 Hold Fn (Globe) to speak, release to transcribe and paste.
 
-Perfect for hands-free dictation to Claude Code or any text input.
+Perfect for hands-free dictation to any text input.
 
 Usage:
-    python3 dictator.py
+    python3 pusha_talk.py
 
 Requirements:
     - macOS (uses rumps for menu bar, AppleScript for paste)
@@ -31,14 +31,15 @@ from app.core import history as hist
 from app.core.state import AppState as State, STATE_DESCRIPTIONS, STATE_ICONS
 from app.core.transcription import TranscriptionEngine
 from app.gui.history_window import HistoryWindow
+from app.platform.macos.context import FocusedAppContext
 from app.platform.macos.hotkey import HAS_PYNPUT, HAS_QUARTZ, MacOSHotkeyProvider
-from app.platform.macos.output import MacOSOutputAutomation
+from app.platform.macos.output import MacOSOutputAutomation, trigger_haptic
 
-# Debug logging — opt-in via --debug flag or DICTATOR_DEBUG=1 env var
-_DEBUG = ("--debug" in sys.argv) or (os.environ.get("DICTATOR_DEBUG") == "1")
+# Debug logging — opt-in via --debug flag or PUSHA_DEBUG=1 env var
+_DEBUG = ("--debug" in sys.argv) or (os.environ.get("PUSHA_DEBUG") == "1")
 if "--debug" in sys.argv:
     sys.argv.remove("--debug")
-_LOG_PATH = Path.home() / ".config" / "dictator" / "debug.log"
+_LOG_PATH = Path.home() / ".config" / "pusha-talk" / "debug.log"
 _LOG_PATH.parent.mkdir(parents=True, exist_ok=True)
 logging.basicConfig(
     filename=str(_LOG_PATH) if _DEBUG else os.devnull,
@@ -46,7 +47,7 @@ logging.basicConfig(
     format="%(asctime)s [%(levelname)s] %(message)s",
     datefmt="%H:%M:%S",
 )
-log = logging.getLogger("dictator")
+log = logging.getLogger("pusha")
 
 # Set working directory for model cache
 os.chdir(os.path.expanduser("~"))
@@ -196,6 +197,12 @@ if HAS_APPKIT:
             self._label_text = label
             self.setNeedsDisplay_(True)
 
+        def setResultPreview_(self, text):
+            """Temporarily show transcription result text in the HUD."""
+            self._state = "idle"
+            self._label_text = text if len(text) <= 35 else text[:32] + "..."
+            self.setNeedsDisplay_(True)
+
         def animationTick(self):
             self._tick += 1
             self.setNeedsDisplay_(True)
@@ -293,6 +300,12 @@ if HAS_APPKIT:
             if self._view is not None:
                 self._view.animationTick()
 
+        def setResultPreview_(self, ns_string):
+            """Show transcription result preview in the HUD."""
+            if self._view is not None:
+                self._stop_animation_timer()
+                self._view.setResultPreview_(str(ns_string))
+
         def showPanel(self):
             if self._panel is not None:
                 self._panel.orderFront_(None)
@@ -370,6 +383,16 @@ class FloatingHUD:
             'updateLevel:', ns_num, False
         )
 
+    def set_result_preview(self, text):
+        """Flash transcribed text in HUD before pasting."""
+        if not self._enabled or self._updater is None:
+            return
+        from Foundation import NSString as _NSString
+        ns_str = _NSString.stringWithString_(text)
+        self._updater.performSelectorOnMainThread_withObject_waitUntilDone_(
+            'setResultPreview:', ns_str, False
+        )
+
     def show(self):
         if not self._enabled or self._updater is None:
             return
@@ -389,12 +412,12 @@ class FloatingHUD:
 # MENU BAR APPLICATION
 # ============================================================================
 
-class DictatorApp(rumps.App):
+class PushaTalkApp(rumps.App):
     """Main menu bar application."""
 
     def __init__(self):
-        super(DictatorApp, self).__init__(
-            "Dictator",
+        super(PushaTalkApp, self).__init__(
+            "Pusha Talk",
             icon=None,
             title=STATE_ICONS[State.LOADING]
         )
@@ -411,6 +434,7 @@ class DictatorApp(rumps.App):
         # Push-to-Talk state
         self.ptt_stop_event = threading.Event()
         self.ptt_recording = False
+        self.focused_app = None  # Captured on PTT press for context-aware transcription
 
         # Initialize components
         self.audio_engine = AudioEngine(CONFIG, self.set_state)
@@ -537,6 +561,18 @@ class DictatorApp(rumps.App):
         self.append_mode_item = rumps.MenuItem("Append Mode", callback=self.toggle_append_mode)
         self.append_mode_item.state = 1 if CONFIG.get("append_mode", False) else 0
 
+        # Clipboard restore toggle
+        self.clipboard_restore_item = rumps.MenuItem("Clipboard Restore", callback=self.toggle_clipboard_restore)
+        self.clipboard_restore_item.state = 1 if CONFIG.get("clipboard_restore", True) else 0
+
+        # Haptic feedback toggle
+        self.haptic_item = rumps.MenuItem("Haptic Feedback", callback=self.toggle_haptic)
+        self.haptic_item.state = 1 if CONFIG.get("haptic_feedback", True) else 0
+
+        # Context-aware transcription toggle
+        self.context_item = rumps.MenuItem("Context-Aware", callback=self.toggle_context_aware)
+        self.context_item.state = 1 if CONFIG.get("context_aware", True) else 0
+
         # Input device submenu
         self.device_menu = rumps.MenuItem("Input Device")
         self._populate_device_menu()
@@ -576,6 +612,9 @@ class DictatorApp(rumps.App):
             self.smart_punct_item,
             self.notif_item,
             self.append_mode_item,
+            self.clipboard_restore_item,
+            self.haptic_item,
+            self.context_item,
             None,
             self.test_mic_item,
             self.undo_item,
@@ -637,6 +676,13 @@ class DictatorApp(rumps.App):
         self.ptt_recording = True
         self.ptt_stop_event.clear()
 
+        # Capture focused app before recording starts (for context-aware transcription)
+        self.focused_app = FocusedAppContext.get_focused_app()
+
+        # Haptic feedback on press
+        if CONFIG.get("haptic_feedback", True):
+            trigger_haptic()
+
         # Play a ding sound when PTT key is pressed
         if CONFIG.get("sound_effects"):
             threading.Thread(
@@ -651,6 +697,10 @@ class DictatorApp(rumps.App):
     def _ptt_key_released(self):
         """Called when PTT key is released."""
         self.ptt_stop_event.set()
+
+        # Haptic feedback on release
+        if CONFIG.get("haptic_feedback", True):
+            trigger_haptic()
 
     def _ptt_record_and_transcribe(self):
         """Record while key held, then transcribe and output. Runs in daemon thread."""
@@ -669,8 +719,19 @@ class DictatorApp(rumps.App):
                     log.debug(f"Failed to stat temp audio file: {exc}")
 
                 self.set_state(State.PROCESSING)
+
+                # Build context-aware initial_prompt from focused app
+                initial_prompt = None
+                if CONFIG.get("context_aware", True) and self.focused_app:
+                    app_name = self.focused_app.get("name", "")
+                    if app_name and app_name != "Unknown":
+                        initial_prompt = f"Dictating in {app_name}."
+                        log.info(f"Context prompt: {initial_prompt}")
+
                 log.info("Starting transcription...")
-                text = self.transcription_engine.transcribe(audio_file)
+                text = self.transcription_engine.transcribe(
+                    audio_file, initial_prompt=initial_prompt
+                )
                 log.info(f"Transcription result: {repr(text)}")
 
                 try:
@@ -679,6 +740,11 @@ class DictatorApp(rumps.App):
                     log.debug(f"Failed to remove temp audio file: {exc}")
 
                 if text:
+                    # Flash transcription preview in HUD for 0.75s
+                    self.hud.set_result_preview(text)
+                    import time
+                    time.sleep(0.75)
+
                     self._output_text(text)
                 else:
                     log.warning("Text was None or empty — skipped output")
@@ -736,11 +802,12 @@ class DictatorApp(rumps.App):
         output_mode = CONFIG.get("output_mode", "paste_send")
         send_key = CONFIG.get("send_key", "return")
         append_mode = CONFIG.get("append_mode", False)
+        clipboard_restore = CONFIG.get("clipboard_restore", True)
 
         if output_mode == "paste_send":
-            self.output_handler.paste_and_send(processed_text, send_key, append_mode)
+            self.output_handler.paste_and_send(processed_text, send_key, append_mode, clipboard_restore)
         elif output_mode == "paste_only":
-            self.output_handler.paste_only(processed_text, append_mode)
+            self.output_handler.paste_only(processed_text, append_mode, clipboard_restore)
         elif output_mode == "type_send":
             self.output_handler.type_and_send(processed_text, send_key)
         elif output_mode == "type_only":
@@ -753,7 +820,7 @@ class DictatorApp(rumps.App):
 
         if CONFIG.get("show_notifications"):
             preview = processed_text[:50] + "..." if len(processed_text) > 50 else processed_text
-            self.output_handler.show_notification("Dictator", preview)
+            self.output_handler.show_notification("Pusha Talk", preview)
 
     def toggle_pause(self, sender):
         """Toggle pause/resume PTT."""
@@ -854,6 +921,24 @@ class DictatorApp(rumps.App):
         """Toggle append mode (append to clipboard instead of replacing)."""
         CONFIG["append_mode"] = not CONFIG.get("append_mode", False)
         sender.state = 1 if CONFIG["append_mode"] else 0
+        save_config(CONFIG)
+
+    def toggle_clipboard_restore(self, sender):
+        """Toggle clipboard save/restore around paste operations."""
+        CONFIG["clipboard_restore"] = not CONFIG.get("clipboard_restore", True)
+        sender.state = 1 if CONFIG["clipboard_restore"] else 0
+        save_config(CONFIG)
+
+    def toggle_haptic(self, sender):
+        """Toggle haptic feedback on PTT press/release."""
+        CONFIG["haptic_feedback"] = not CONFIG.get("haptic_feedback", True)
+        sender.state = 1 if CONFIG["haptic_feedback"] else 0
+        save_config(CONFIG)
+
+    def toggle_context_aware(self, sender):
+        """Toggle context-aware transcription (sends app name to Whisper)."""
+        CONFIG["context_aware"] = not CONFIG.get("context_aware", True)
+        sender.state = 1 if CONFIG["context_aware"] else 0
         save_config(CONFIG)
 
     def set_language(self, sender):
@@ -981,7 +1066,7 @@ class DictatorApp(rumps.App):
     def show_help(self, sender):
         """Show quick help dialog."""
         rumps.alert(
-            title="Dictator - Quick Help",
+            title="Pusha Talk - Quick Help",
             message="How to use (Push-to-Talk):\n\n"
                     "1. Look for 🎤 in the menu bar (ready state)\n"
                     "2. Hold the PTT key (default: Fn/Globe)\n"
@@ -1006,7 +1091,7 @@ class DictatorApp(rumps.App):
         total_words = CONFIG.get("total_words", 0)
 
         rumps.alert(
-            title="Dictator",
+            title="Pusha Talk",
             message=f"Version {__version__}\n"
                     f"By {__author__}\n\n"
                     f"A hands-free voice dictation tool\n"
@@ -1066,7 +1151,7 @@ class DictatorApp(rumps.App):
             return
 
         # Build export text
-        lines = ["Dictator - Transcription History", "=" * 40, ""]
+        lines = ["Pusha Talk - Transcription History", "=" * 40, ""]
         for entry in all_entries:
             lines.append(f"[{entry.get('timestamp', '')}]")
             lines.append(entry.get("text", ""))
@@ -1077,7 +1162,7 @@ class DictatorApp(rumps.App):
         # Copy to clipboard and save to file
         pyperclip.copy(export_text)
 
-        export_path = Path.home() / "Desktop" / f"dictator-history-{datetime.now().strftime('%Y%m%d-%H%M%S')}.txt"
+        export_path = Path.home() / "Desktop" / f"pusha-talk-history-{datetime.now().strftime('%Y%m%d-%H%M%S')}.txt"
         try:
             with open(export_path, 'w') as f:
                 f.write(export_text)
@@ -1119,7 +1204,7 @@ class DictatorApp(rumps.App):
         if self.last_original_text:
             pyperclip.copy(self.last_original_text)
             rumps.notification(
-                title="Dictator",
+                title="Pusha Talk",
                 subtitle="Undo",
                 message=f"Original text copied: {self.last_original_text[:30]}..."
             )
@@ -1168,7 +1253,7 @@ class DictatorApp(rumps.App):
 # ============================================================================
 
 def main():
-    app = DictatorApp()
+    app = PushaTalkApp()
     app.run()
 
 if __name__ == "__main__":

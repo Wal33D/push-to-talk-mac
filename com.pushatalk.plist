@@ -3,11 +3,11 @@
 <plist version="1.0">
 <dict>
     <key>Label</key>
-    <string>com.dictator</string>
+    <string>com.pushatalk</string>
     <key>ProgramArguments</key>
     <array>
         <string>INSTALL_PATH/venv/bin/python3</string>
-        <string>INSTALL_PATH/dictator.py</string>
+        <string>INSTALL_PATH/pusha_talk.py</string>
     </array>
     <key>WorkingDirectory</key>
     <string>INSTALL_PATH</string>
@@ -16,8 +16,8 @@
     <key>KeepAlive</key>
     <false/>
     <key>StandardOutPath</key>
-    <string>/tmp/dictator.log</string>
+    <string>/tmp/pusha-talk.log</string>
     <key>StandardErrorPath</key>
-    <string>/tmp/dictator.err</string>
+    <string>/tmp/pusha-talk.err</string>
 </dict>
 </plist>

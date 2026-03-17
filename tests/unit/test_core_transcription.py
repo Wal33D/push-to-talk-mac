@@ -12,7 +12,7 @@ class StubBackend:
     def load_model(self, model_name=None):
         self.loaded_model_name = model_name
 
-    def transcribe(self, audio_file, language=None):
+    def transcribe(self, audio_file, language=None, initial_prompt=None):
         self.calls.append((audio_file, language))
         return self._text
 
@@ -39,7 +39,7 @@ class CoreTranscriptionTests(unittest.TestCase):
         backend = StubBackend("1.5")
         engine = TranscriptionEngine(model_name="base", language="en", backend=backend)
 
-        with self.assertLogs("dictator", level="WARNING") as logs:
+        with self.assertLogs("pusha", level="WARNING") as logs:
             result = engine.transcribe("clip.wav")
 
         self.assertIsNone(result)

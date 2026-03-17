@@ -27,9 +27,9 @@ from http.server import HTTPServer, BaseHTTPRequestHandler
 from pathlib import Path
 from urllib.parse import parse_qs, urlparse
 
-LOG = logging.getLogger("dictator")
+LOG = logging.getLogger("pusha")
 
-HISTORY_FILE = Path.home() / ".config" / "dictator" / "history.json"
+HISTORY_FILE = Path.home() / ".config" / "pusha-talk" / "history.json"
 
 
 def _load_history() -> list[dict]:
@@ -146,7 +146,7 @@ def _serve():
     port = _find_free_port()
     server = HTTPServer(("127.0.0.1", port), _Handler)
     url = f"http://127.0.0.1:{port}"
-    print(f"Dictator history → {url}")
+    print(f"Pusha Talk history → {url}")
     threading.Thread(target=lambda: webbrowser.open(url), daemon=True).start()
     try:
         server.serve_forever()
@@ -163,7 +163,7 @@ _HTML_PAGE = r"""<!DOCTYPE html>
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Dictator — Transcription History</title>
+<title>Pusha Talk — Transcription History</title>
 <style>
   :root {
     --bg: #1a1a2e;

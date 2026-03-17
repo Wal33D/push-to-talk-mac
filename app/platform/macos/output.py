@@ -4,10 +4,54 @@ from __future__ import annotations
 
 import logging
 import subprocess
+import threading
+import time
 
 import pyperclip
 
-LOG = logging.getLogger("dictator")
+LOG = logging.getLogger("pusha")
+
+
+def _save_clipboard():
+    """Save current clipboard text content. Returns saved text or None if non-text."""
+    try:
+        result = subprocess.run(
+            ["pbpaste"], capture_output=True, text=True, timeout=2
+        )
+        text = result.stdout
+        # If pbpaste returns empty, clipboard likely has non-text content (images, etc.)
+        return text if text else None
+    except Exception as exc:
+        LOG.debug(f"Failed to save clipboard: {exc}")
+        return None
+
+
+def _restore_clipboard(saved):
+    """Restore clipboard after a short delay. Runs in background thread."""
+    if saved is None:
+        return
+    def _do_restore():
+        time.sleep(0.15)
+        try:
+            proc = subprocess.Popen(
+                ["pbcopy"], stdin=subprocess.PIPE, timeout=2
+            )
+            proc.communicate(input=saved.encode("utf-8"), timeout=2)
+        except Exception as exc:
+            LOG.debug(f"Failed to restore clipboard: {exc}")
+    threading.Thread(target=_do_restore, daemon=True).start()
+
+
+def trigger_haptic():
+    """Trigger haptic feedback on Force Touch trackpad via NSHapticFeedbackManager."""
+    try:
+        from AppKit import NSHapticFeedbackManager
+        performer = NSHapticFeedbackManager.defaultPerformer()
+        # 1 = NSHapticFeedbackPerformanceTimeDefault
+        # NSHapticFeedbackPatternGeneric = 0
+        performer.performFeedbackPattern_performanceTime_(0, 1)
+    except Exception:
+        pass  # Silently skip on non-Force Touch hardware
 
 
 def escape_applescript_string(text):
@@ -31,8 +75,10 @@ class OutputHandler:
         return text
 
     @staticmethod
-    def paste_and_send(text, send_key="return", append=False):
+    def paste_and_send(text, send_key="return", append=False, clipboard_restore=True):
         """Copy text to clipboard and simulate Cmd+V, then send key."""
+        saved_clipboard = _save_clipboard() if clipboard_restore else None
+
         text = OutputHandler.prepare_text(text, append)
         pyperclip.copy(text)
 
@@ -54,15 +100,22 @@ class OutputHandler:
         end tell
         '''
         try:
-            subprocess.run(["osascript", "-e", script], check=True, capture_output=True, timeout=5)
+            result = subprocess.run(["osascript", "-e", script], check=True, capture_output=True, timeout=5)
+            if clipboard_restore:
+                _restore_clipboard(saved_clipboard)
             return True
         except Exception as exc:
-            LOG.debug(f"paste_and_send failed: {exc}")
+            LOG.debug(f"paste_and_send failed: {exc}, falling back to type_text")
+            OutputHandler.type_and_send(text, send_key)
+            if clipboard_restore:
+                _restore_clipboard(saved_clipboard)
             return False
 
     @staticmethod
-    def paste_only(text, append=False):
+    def paste_only(text, append=False, clipboard_restore=True):
         """Copy text to clipboard and simulate Cmd+V (no Enter)."""
+        saved_clipboard = _save_clipboard() if clipboard_restore else None
+
         text = OutputHandler.prepare_text(text, append)
         pyperclip.copy(text)
 
@@ -72,10 +125,15 @@ class OutputHandler:
         end tell
         '''
         try:
-            subprocess.run(["osascript", "-e", script], check=True, capture_output=True, timeout=5)
+            result = subprocess.run(["osascript", "-e", script], check=True, capture_output=True, timeout=5)
+            if clipboard_restore:
+                _restore_clipboard(saved_clipboard)
             return True
         except Exception as exc:
-            LOG.debug(f"paste_only failed: {exc}")
+            LOG.debug(f"paste_only failed: {exc}, falling back to type_text")
+            OutputHandler.type_text(text)
+            if clipboard_restore:
+                _restore_clipboard(saved_clipboard)
             return False
 
     @staticmethod
@@ -163,11 +221,11 @@ class OutputHandler:
 class MacOSOutputAutomation:
     """Protocol-friendly adapter for macOS output automation."""
 
-    def paste_and_send(self, text, send_key="return", append=False):
-        return OutputHandler.paste_and_send(text, send_key=send_key, append=append)
+    def paste_and_send(self, text, send_key="return", append=False, clipboard_restore=True):
+        return OutputHandler.paste_and_send(text, send_key=send_key, append=append, clipboard_restore=clipboard_restore)
 
-    def paste_only(self, text, append=False):
-        return OutputHandler.paste_only(text, append=append)
+    def paste_only(self, text, append=False, clipboard_restore=True):
+        return OutputHandler.paste_only(text, append=append, clipboard_restore=clipboard_restore)
 
     def copy_only(self, text):
         return OutputHandler.copy_only(text)

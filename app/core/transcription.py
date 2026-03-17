@@ -8,7 +8,7 @@ import re
 from app.stt.base import TranscriptionBackend
 from app.stt.mlx_backend import MlxTranscriptionBackend
 
-LOG = logging.getLogger("dictator")
+LOG = logging.getLogger("pusha")
 
 
 class TranscriptionEngine:
@@ -45,10 +45,12 @@ class TranscriptionEngine:
         """Set the transcription language."""
         self.language = language
 
-    def transcribe(self, audio_file):
+    def transcribe(self, audio_file, initial_prompt=None):
         """Transcribe an audio file to text."""
         try:
-            text = self.backend.transcribe(audio_file, language=self.language)
+            text = self.backend.transcribe(
+                audio_file, language=self.language, initial_prompt=initial_prompt
+            )
             if text is None:
                 return None
             text = text.strip()

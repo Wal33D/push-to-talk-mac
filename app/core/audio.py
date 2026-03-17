@@ -75,9 +75,14 @@ class AudioEngine:
         chunk = self.config["chunk"]
         max_chunks = int(120 * rate / chunk)  # 2 minute cap
         min_record_chunks = int(0.5 * rate / chunk)  # Record at least 0.5s no matter what
-        tail_chunks = int(0.3 * rate / chunk)  # 0.3s extra after key release
+        silence_threshold = self.config.get("vad_silence_threshold", 500)
+        vad_tail_max = self.config.get("vad_tail_max", 1.5)
+        silence_countdown_chunks = int(0.3 * rate / chunk)  # 0.3s silence countdown
+        max_tail_chunks = int(vad_tail_max * rate / chunk)  # Hard cap on tail
         total_chunks = 0
         released = False
+        tail_chunks_elapsed = 0
+        silence_remaining = silence_countdown_chunks
 
         self.state_callback(AppState.SPEAKING)
 
@@ -85,13 +90,33 @@ class AudioEngine:
             while total_chunks < max_chunks:
                 try:
                     data = stream.read(chunk, exception_on_overflow=False)
+                except (IOError, OSError) as exc:
+                    # Audio device disconnected or changed — try to reinitialize
+                    print(f"PTT: Audio device error, attempting recovery: {exc}")
+                    try:
+                        stream.stop_stream()
+                        stream.close()
+                    except Exception:
+                        pass
+                    try:
+                        stream = p.open(
+                            format=pyaudio.paInt16,
+                            channels=self.config["channels"],
+                            rate=rate,
+                            input=True,
+                            frames_per_buffer=chunk,
+                        )
+                        continue  # Retry with new default device
+                    except Exception:
+                        break  # Give up, return what we have
                 except Exception:
                     continue
                 frames.append(data)
                 total_chunks += 1
 
+                level = self.get_audio_level(data)
                 if level_callback is not None:
-                    level_callback(self.get_audio_level(data))
+                    level_callback(level)
 
                 # Don't check stop_event until we've recorded the minimum
                 if total_chunks < min_record_chunks:
@@ -100,12 +125,20 @@ class AudioEngine:
                 # After minimum, check if key was released
                 if not released and stop_event.is_set():
                     released = True
-                    tail_remaining = tail_chunks
+                    tail_chunks_elapsed = 0
+                    silence_remaining = silence_countdown_chunks
 
-                # Record tail buffer after release for trailing audio
+                # Energy-based VAD tail after key release
                 if released:
-                    tail_remaining -= 1
-                    if tail_remaining <= 0:
+                    tail_chunks_elapsed += 1
+                    if level > silence_threshold:
+                        # Speech still happening — reset silence countdown
+                        silence_remaining = silence_countdown_chunks
+                    else:
+                        silence_remaining -= 1
+
+                    # Stop if silence countdown expired OR hard tail cap hit
+                    if silence_remaining <= 0 or tail_chunks_elapsed >= max_tail_chunks:
                         break
         except Exception as exc:
             print(f"PTT recording error: {exc}")

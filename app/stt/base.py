@@ -11,5 +11,10 @@ class TranscriptionBackend(Protocol):
     def load_model(self, model_name: str | None = None) -> None:
         """Load or initialize model resources."""
 
-    def transcribe(self, audio_file: str, language: str | None = None) -> str | None:
+    def transcribe(
+        self,
+        audio_file: str,
+        language: str | None = None,
+        initial_prompt: str | None = None,
+    ) -> str | None:
         """Transcribe audio from file path to text."""

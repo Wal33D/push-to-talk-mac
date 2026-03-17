@@ -6,7 +6,7 @@ import json
 import logging
 from pathlib import Path
 
-CONFIG_DIR = Path.home() / ".config" / "dictator"
+CONFIG_DIR = Path.home() / ".config" / "pusha-talk"
 CONFIG_FILE = CONFIG_DIR / "config.json"
 
 DEFAULT_CONFIG = {
@@ -14,7 +14,7 @@ DEFAULT_CONFIG = {
     "model": "base",
     # Audio settings
     "rate": 16000,
-    "chunk": 1024,
+    "chunk": 640,  # 640 samples = 40ms at 16kHz, aligned with Whisper HOP_LENGTH
     "channels": 1,
     # Behavior
     "auto_send": True,
@@ -33,11 +33,18 @@ DEFAULT_CONFIG = {
     "custom_replacements": {},  # User-defined text replacements
     # Push-to-Talk key
     "ptt_key": "fn",  # Key to hold for PTT
+    # Wispr Flow-inspired enhancements
+    "clipboard_restore": True,  # Restore clipboard after paste operations
+    "haptic_feedback": True,  # Haptic feedback on PTT press/release (Force Touch)
+    "context_aware": True,  # Send focused app name as Whisper initial_prompt
+    "vad_silence_threshold": 500,  # Energy threshold for VAD tail buffer
+    "vad_tail_max": 1.5,  # Max seconds to continue recording after key release
+    "auto_output_mode": False,  # Auto-select output mode based on focused app
 }
 
 VALID_OUTPUT_MODES = {"paste_send", "paste_only", "type_send", "type_only", "copy_only"}
 
-_LOG = logging.getLogger("dictator")
+_LOG = logging.getLogger("pusha")
 
 
 def normalize_config(config):

@@ -1,2 +1,2 @@
-"""Dictator application package."""
+"""Pusha Talk application package."""
 

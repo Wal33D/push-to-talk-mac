@@ -1,1 +1,1 @@
-"""GUI components for Dictator."""
+"""GUI components for Pusha Talk."""

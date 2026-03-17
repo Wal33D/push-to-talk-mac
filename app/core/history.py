@@ -10,7 +10,7 @@ from pathlib import Path
 
 from app.core.config import CONFIG_DIR
 
-LOG = logging.getLogger("dictator")
+LOG = logging.getLogger("pusha")
 
 HISTORY_FILE = CONFIG_DIR / "history.json"
 MAX_ENTRIES = 500

@@ -20,7 +20,7 @@ try:
 except ImportError:
     HAS_QUARTZ = False
 
-LOG = logging.getLogger("dictator")
+LOG = logging.getLogger("pusha")
 
 # Fn/Globe key modifier flag on macOS.
 _FN_FLAG = 0x800000  # NX_SECONDARYFNMASK / kCGEventFlagMaskSecondaryFn
