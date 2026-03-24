@@ -42,8 +42,8 @@ if "--debug" in sys.argv:
 _LOG_PATH = Path.home() / ".config" / "pusha-talk" / "debug.log"
 _LOG_PATH.parent.mkdir(parents=True, exist_ok=True)
 logging.basicConfig(
-    filename=str(_LOG_PATH) if _DEBUG else os.devnull,
-    level=logging.DEBUG if _DEBUG else logging.WARNING,
+    filename=str(_LOG_PATH),
+    level=logging.DEBUG if _DEBUG else logging.INFO,
     format="%(asctime)s [%(levelname)s] %(message)s",
     datefmt="%H:%M:%S",
 )
@@ -940,8 +940,10 @@ class PushaTalkApp(rumps.App):
                     self._output_text(text)
                 else:
                     log.warning("Text was None or empty — skipped output")
+                    self.hud.set_result_preview("(no speech detected)")
             else:
                 log.warning("No audio file returned (too short?)")
+                self.hud.set_result_preview("(too short)")
         except Exception as e:
             log.error(f"PTT error: {e}", exc_info=True)
         finally:

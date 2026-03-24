@@ -56,8 +56,8 @@ class TranscriptionEngine:
             text = text.strip()
             LOG.info(f"Raw whisper output: {repr(text)}")
 
-            if not text or len(text) < 3:
-                LOG.warning(f"Text too short, discarding: {repr(text)}")
+            if not text:
+                LOG.warning("Text was empty after strip")
                 return None
 
             if self._is_hallucination(text):
@@ -70,152 +70,59 @@ class TranscriptionEngine:
             return None
 
     def _is_hallucination(self, text):
-        """Filter out Whisper hallucinations (junk output on noise)."""
+        """Filter out Whisper hallucinations (junk output on noise).
+
+        IMPORTANT: This filter should be CONSERVATIVE. Only filter patterns
+        that are definitively Whisper artifacts, never valid user speech.
+        False positives (filtering real speech) are much worse than false
+        negatives (letting through occasional junk).
+        """
         text_stripped = text.strip()
         text_lower = text_stripped.lower()
 
-        # Very short text is often hallucination
-        if len(text_stripped) < 3:
-            return True
-
-        # Just numbers, percentages, or decimals (e.g., "1.5%", "2.0", "1.1.1")
+        # Just numbers, percentages, or decimals (e.g., "1.5%", "2.0")
         if re.match(r"^[\d\.\,\%\s\-]+$", text_stripped):
             return True
 
-        # Just punctuation and numbers
-        if re.match(r"^[\d\.\,\%\s\-\!\?\.\,\:\;]+$", text_stripped):
+        # Just punctuation, numbers, and whitespace
+        if re.match(r"^[\d\.\,\%\s\-\!\?\:\;]+$", text_stripped):
             return True
 
-        # Timestamps like "00:00", "1:23", "12:34:56"
-        if re.match(r"^[\d\:\s]+$", text_stripped):
+        # Music notes, symbols, special characters only
+        if re.match(r"^[♪♫♬\*\-\_\.\s…]+$", text_stripped):
             return True
 
-        # Music notes, symbols, special characters
-        if re.match(r"^[♪♫♬\*\-\_\.\s]+$", text_stripped):
+        # Whisper metadata hallucinations (bracketed/parenthesized descriptions)
+        if re.match(r"^\[.*\]$", text_stripped) or re.match(r"^\(.*\)$", text_stripped):
             return True
 
-        # Foreign characters that are likely noise (Chinese/Japanese/Korean single chars)
-        if len(text_stripped) <= 3 and re.match(r"^[\u4e00-\u9fff\u3040-\u309f\u30a0-\u30ff\uac00-\ud7af]+$", text_stripped):
-            return True
-
-        # Common junk patterns (Whisper hallucinations)
-        junk_patterns = [
-            # Numbers and decimals
-            "1.1",
-            "1.5",
-            "2.0",
-            "0.5",
-            "1.0",
-            "2.5",
-            "3.0",
-            # Symbols
-            "...",
-            "♪",
-            "***",
-            "---",
-            "___",
-            "…",
-            "・・・",
-            # YouTube/video endings
-            "Thank you",
-            "Thanks for watching",
-            "Thanks for listening",
-            "Subscribe",
-            "Bye",
-            "See you",
-            "Goodbye",
-            "See you next time",
-            "Please subscribe",
-            "Like and subscribe",
-            "Hit the bell",
-            "Thank you for watching",
-            "You're welcome",
-            "Don't forget to",
-            # Whisper artifacts
-            "I'm sorry",
-            "Hmm",
-            "Uh",
-            "Um",
-            "Huh",
-            "silence",
-            "music",
-            "applause",
-            "laughter",
-            "background noise",
-            "[Music]",
-            "[Applause]",
-            "[Laughter]",
-            "(music)",
-            "(applause)",
-            # Very short common words (when alone)
-            "you",
-            "the",
-            "a",
-            "to",
-            "is",
-            "it",
-            "and",
-            "of",
-            "in",
-            "on",
-            # Sounds
-            "Shhh",
-            "Shh",
-            "Ssh",
-            "Psst",
-            "Sss",
-            "Mm-hmm",
-            "Uh-huh",
-            "Mhm",
-            "Mmm",
-            "Uh huh",
-            "Oh",
-            "Ah",
-            "Eh",
-            "Ooh",
-            "Aah",
-            "Yeah",
-            "Yep",
-            "Nope",
-            "Yup",
-            "Nah",
-            "Ha",
-            "Haha",
-            "Hehe",
-            "Lol",
-            # Attribution text
-            "Transcribed by",
-            "Subtitles by",
-            "Translated by",
-            "Copyright",
-            "All rights reserved",
-            "www.",
-            "http",
-            # Repeated sounds
-            "la la la",
-            "da da da",
-            "na na na",
-            "doo doo",
-            # Breathing/ambient
-            "breathing",
-            "sighs",
-            "coughs",
-            "sniffs",
+        # Definitive Whisper hallucination patterns — things a real user
+        # would NEVER intentionally dictate
+        hallucination_exact = [
+            "thanks for watching",
+            "thanks for listening",
+            "please subscribe",
+            "like and subscribe",
+            "hit the bell",
+            "thank you for watching",
+            "don't forget to subscribe",
+            "see you next time",
+            "transcribed by",
+            "subtitles by",
+            "translated by",
+            "copyright",
+            "all rights reserved",
         ]
 
-        # Check for exact matches (short hallucinations)
-        if text_lower in [p.lower() for p in junk_patterns]:
+        if text_lower in hallucination_exact:
             return True
 
-        # Check for patterns that start with common hallucinations
+        # Patterns that START with definitive hallucinations
         hallucination_starts = [
-            "thank you for",
-            "thanks for",
+            "thank you for watching",
+            "thanks for watching",
             "please subscribe",
-            "don't forget",
-            "see you",
-            "bye bye",
-            "goodbye",
+            "don't forget to subscribe",
             "transcribed by",
             "subtitles by",
             "translated by",
@@ -224,45 +131,22 @@ class TranscriptionEngine:
             if text_lower.startswith(start):
                 return True
 
-        # Check for repeated patterns — but ONLY in short text (< 8 words).
-        # In longer text, common words like "to", "you", "the" naturally repeat.
-        words = text.split()
-        if len(words) <= 8:
-            for pattern in junk_patterns:
-                if len(pattern) <= 3:
-                    word_count = len(re.findall(r"\b" + re.escape(pattern) + r"\b", text_lower, re.IGNORECASE))
-                    if word_count > 2:
-                        LOG.debug(f"Hallucination: short pattern '{pattern}' repeated {word_count}x in short text")
-                        return True
-                else:
-                    if text.count(pattern) > 2 or text_lower.count(pattern.lower()) > 2:
-                        LOG.debug(f"Hallucination: long pattern '{pattern}' repeated >2x")
-                        return True
+        # URLs (Whisper sometimes hallucinates URLs)
+        if text_lower.startswith("www.") or text_lower.startswith("http"):
+            return True
 
-        # Check if mostly non-alphanumeric
+        # Excessive repetition (same word/phrase repeated 4+ times)
+        words = text.split()
+        if len(words) > 4:
+            unique_words = set(w.lower() for w in words)
+            if len(unique_words) == 1:
+                return True  # All same word
+            if len(unique_words) < len(words) * 0.2:
+                return True  # >80% repeated
+
+        # Check if mostly non-alphanumeric (symbols/noise)
         alpha_count = sum(1 for c in text if c.isalpha())
         if len(text_stripped) > 5 and alpha_count < len(text_stripped) * 0.3:
-            return True
-
-        # Check for excessive repetition (same word repeated)
-        words = text.split()
-        if len(words) > 3:
-            unique_words = set(w.lower() for w in words)
-            if len(unique_words) < len(words) * 0.3:
-                return True
-
-        # Check for stuttering pattern (word repeated immediately)
-        if len(words) >= 2:
-            repeated_count = sum(1 for i in range(len(words) - 1) if words[i].lower() == words[i + 1].lower())
-            if repeated_count >= len(words) // 2:
-                return True
-
-        # Single word that's just a number or very short
-        if len(words) == 1 and (text_stripped.replace(".", "").replace("%", "").isdigit() or len(text_stripped) < 4):
-            return True
-
-        # Check for all-caps short text (often noise)
-        if len(text_stripped) < 10 and text_stripped.isupper() and text_stripped.isalpha():
             return True
 
         return False

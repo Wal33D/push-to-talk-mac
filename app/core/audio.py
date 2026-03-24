@@ -11,6 +11,9 @@ import pyaudio
 
 from app.core.state import AppState
 
+import logging
+LOG = logging.getLogger("pusha")
+
 
 class AudioEngine:
     """Handles microphone input for push-to-talk recording."""
@@ -184,16 +187,18 @@ class AudioEngine:
             stream.close()
             p.terminate()
 
-        # Skip only if extremely short (< 0.3s of actual audio)
-        min_useful_chunks = int(0.3 * rate / chunk)
+        # Skip only if extremely short (< 0.2s of actual audio)
+        min_useful_chunks = int(0.2 * rate / chunk)
         if total_chunks < min_useful_chunks:
+            LOG.info(f"PTT: Recording too short ({total_chunks} chunks < {min_useful_chunks} min), skipping")
             return None
 
         # Noise gate — skip if audio was just ambient noise
         rms = self.get_rms_level(frames)
-        noise_gate = self.config.get("noise_gate", 150)
+        noise_gate = self.config.get("noise_gate", 50)
+        LOG.info(f"PTT: Audio RMS={rms}, noise_gate={noise_gate}, chunks={total_chunks}")
         if rms < noise_gate:
-            print(f"PTT: Audio below noise gate (RMS {rms} < {noise_gate}), skipping")
+            LOG.info(f"PTT: Audio below noise gate (RMS {rms} < {noise_gate}), skipping")
             return None
 
         # Normalize audio levels for consistent Whisper input
