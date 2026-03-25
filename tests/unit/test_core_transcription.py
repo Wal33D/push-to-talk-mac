@@ -53,6 +53,65 @@ class CoreTranscriptionTests(unittest.TestCase):
 
         self.assertEqual(result, "hello from test")
 
+    def test_short_valid_speech_not_filtered(self):
+        """Short utterances like 'Yeah', 'OK', 'Thanks' must NOT be filtered."""
+        engine = TranscriptionEngine(model_name="base", language="en")
+        valid_phrases = ["Yeah", "OK", "Thanks", "Hmm", "Sure", "Bye", "Nope", "Yep"]
+        for phrase in valid_phrases:
+            backend = StubBackend(phrase)
+            engine_instance = TranscriptionEngine(model_name="base", language="en", backend=backend)
+            result = engine_instance.transcribe("clip.wav")
+            self.assertEqual(result, phrase, f"'{phrase}' was wrongly filtered")
+
+    def test_whisper_artifacts_filtered(self):
+        """Known Whisper artifacts must be filtered."""
+        engine = TranscriptionEngine(model_name="base", language="en")
+        artifacts = [
+            "Thanks for watching",
+            "Please subscribe",
+            "Transcribed by AI",
+            "♪♪♪",
+            "1.5",
+            "...",
+            "[Music]",
+            "(applause)",
+        ]
+        for artifact in artifacts:
+            backend = StubBackend(artifact)
+            engine_instance = TranscriptionEngine(model_name="base", language="en", backend=backend)
+            result = engine_instance.transcribe("clip.wav")
+            self.assertIsNone(result, f"'{artifact}' should have been filtered as hallucination")
+
+    def test_empty_and_whitespace_filtered(self):
+        """Empty or whitespace-only text returns None."""
+        for text in ["", "   ", None]:
+            backend = StubBackend(text)
+            engine = TranscriptionEngine(model_name="base", language="en", backend=backend)
+            result = engine.transcribe("clip.wav")
+            self.assertIsNone(result, f"'{text}' should return None")
+
+    def test_normal_sentences_pass(self):
+        """Normal dictated sentences must pass through."""
+        sentences = [
+            "Send me the file please",
+            "I'll be there in 5 minutes",
+            "Can you check the pull request",
+            "Hey what's up",
+            "Thank you so much for helping",
+        ]
+        for sentence in sentences:
+            backend = StubBackend(sentence)
+            engine = TranscriptionEngine(model_name="base", language="en", backend=backend)
+            result = engine.transcribe("clip.wav")
+            self.assertEqual(result, sentence, f"'{sentence}' was wrongly filtered")
+
+    def test_excessive_repetition_filtered(self):
+        """Text with extreme word repetition is filtered."""
+        backend = StubBackend("the the the the the the the the")
+        engine = TranscriptionEngine(model_name="base", language="en", backend=backend)
+        result = engine.transcribe("clip.wav")
+        self.assertIsNone(result, "Excessive repetition should be filtered")
+
 
 if __name__ == "__main__":
     unittest.main()
