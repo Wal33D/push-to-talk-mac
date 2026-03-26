@@ -14,6 +14,15 @@ from app.core.state import AppState
 import logging
 LOG = logging.getLogger("pusha")
 
+# Audio recording constants
+MAX_RECORD_SECONDS = 120       # Hard cap on recording length
+MIN_RECORD_SECONDS = 0.5       # Minimum recording before checking stop event
+MIN_USEFUL_SECONDS = 0.2       # Minimum audio to bother transcribing
+DEFAULT_NOISE_GATE = 50        # RMS threshold below which audio is silence
+DEFAULT_VAD_SILENCE_THRESHOLD = 500  # Energy threshold for VAD tail
+DEFAULT_VAD_TAIL_MAX = 1.5     # Max seconds of tail capture after key release
+SILENCE_COUNTDOWN_SECONDS = 0.3     # Seconds of silence before cutting tail
+
 
 class AudioEngine:
     """Handles microphone input for push-to-talk recording."""
@@ -98,7 +107,7 @@ class AudioEngine:
 
             stream = p.open(**stream_kwargs)
         except Exception as exc:
-            print(f"PTT: Failed to open audio stream: {exc}")
+            LOG.error(f"PTT: Failed to open audio stream: {exc}")
             self.state_callback(AppState.ERROR)
             p.terminate()
             return None
@@ -106,11 +115,11 @@ class AudioEngine:
         frames = []
         rate = self.config["rate"]
         chunk = self.config["chunk"]
-        max_chunks = int(120 * rate / chunk)  # 2 minute cap
-        min_record_chunks = int(0.5 * rate / chunk)  # Record at least 0.5s no matter what
-        silence_threshold = self.config.get("vad_silence_threshold", 500)
-        vad_tail_max = self.config.get("vad_tail_max", 1.5)
-        silence_countdown_chunks = int(0.3 * rate / chunk)  # 0.3s silence countdown
+        max_chunks = int(MAX_RECORD_SECONDS * rate / chunk)
+        min_record_chunks = int(MIN_RECORD_SECONDS * rate / chunk)
+        silence_threshold = self.config.get("vad_silence_threshold", DEFAULT_VAD_SILENCE_THRESHOLD)
+        vad_tail_max = self.config.get("vad_tail_max", DEFAULT_VAD_TAIL_MAX)
+        silence_countdown_chunks = int(SILENCE_COUNTDOWN_SECONDS * rate / chunk)
         max_tail_chunks = int(vad_tail_max * rate / chunk)  # Hard cap on tail
         total_chunks = 0
         released = False
@@ -125,7 +134,7 @@ class AudioEngine:
                     data = stream.read(chunk, exception_on_overflow=False)
                 except (IOError, OSError) as exc:
                     # Audio device disconnected or changed — try to reinitialize
-                    print(f"PTT: Audio device error, attempting recovery: {exc}")
+                    LOG.warning(f"PTT: Audio device error, attempting recovery: {exc}")
                     try:
                         stream.stop_stream()
                         stream.close()
@@ -148,7 +157,8 @@ class AudioEngine:
                 total_chunks += 1
 
                 level = self.get_audio_level(data)
-                if level_callback is not None:
+                # Throttle HUD updates to ~12 FPS (every 3rd chunk at 16kHz/640)
+                if level_callback is not None and total_chunks % 3 == 0:
                     level_callback(level)
                 if time_callback is not None and total_chunks % 5 == 0:
                     elapsed = total_chunks * chunk / rate
@@ -179,7 +189,7 @@ class AudioEngine:
                     if silence_remaining <= 0 or tail_chunks_elapsed >= max_tail_chunks:
                         break
         except Exception as exc:
-            print(f"PTT recording error: {exc}")
+            LOG.error(f"PTT recording error: {exc}")
             self.state_callback(AppState.ERROR)
             return None
         finally:
@@ -187,15 +197,14 @@ class AudioEngine:
             stream.close()
             p.terminate()
 
-        # Skip only if extremely short (< 0.2s of actual audio)
-        min_useful_chunks = int(0.2 * rate / chunk)
+        min_useful_chunks = int(MIN_USEFUL_SECONDS * rate / chunk)
         if total_chunks < min_useful_chunks:
             LOG.info(f"PTT: Recording too short ({total_chunks} chunks < {min_useful_chunks} min), skipping")
             return None
 
         # Noise gate — skip if audio was just ambient noise
         rms = self.get_rms_level(frames)
-        noise_gate = self.config.get("noise_gate", 50)
+        noise_gate = self.config.get("noise_gate", DEFAULT_NOISE_GATE)
         LOG.info(f"PTT: Audio RMS={rms}, noise_gate={noise_gate}, chunks={total_chunks}")
         if rms < noise_gate:
             LOG.info(f"PTT: Audio below noise gate (RMS {rms} < {noise_gate}), skipping")
@@ -215,6 +224,6 @@ class AudioEngine:
                 wf.close()
                 return f.name
         except Exception as exc:
-            print(f"PTT: Failed to save audio: {exc}")
+            LOG.error(f"PTT: Failed to save audio: {exc}")
             return None
 

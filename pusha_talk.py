@@ -18,6 +18,7 @@ Requirements:
 
 import os
 import sys
+import time
 import threading
 import subprocess
 import logging
@@ -41,11 +42,14 @@ if "--debug" in sys.argv:
     sys.argv.remove("--debug")
 _LOG_PATH = Path.home() / ".config" / "pusha-talk" / "debug.log"
 _LOG_PATH.parent.mkdir(parents=True, exist_ok=True)
+from logging.handlers import RotatingFileHandler
+_log_handler = RotatingFileHandler(
+    str(_LOG_PATH), maxBytes=5 * 1024 * 1024, backupCount=2,  # 5 MB, keep 2 backups
+)
+_log_handler.setFormatter(logging.Formatter("%(asctime)s [%(levelname)s] %(message)s", datefmt="%H:%M:%S"))
 logging.basicConfig(
-    filename=str(_LOG_PATH),
+    handlers=[_log_handler],
     level=logging.DEBUG if _DEBUG else logging.INFO,
-    format="%(asctime)s [%(levelname)s] %(message)s",
-    datefmt="%H:%M:%S",
 )
 log = logging.getLogger("pusha")
 
@@ -935,7 +939,7 @@ class PushaTalkApp(rumps.App):
                     word_count = len(text.split())
                     preview = f"{text} ({word_count}w)"
                     self.hud.set_result_preview(preview)
-                    threading.Event().wait(0.75)
+                    time.sleep(0.75)
 
                     self._output_text(text)
                 else:

@@ -56,7 +56,14 @@ def trigger_haptic():
 
 def escape_applescript_string(text):
     """Escape text for safe inclusion in AppleScript string literals."""
-    return str(text).replace("\\", "\\\\").replace('"', '\\"')
+    return (
+        str(text)
+        .replace("\\", "\\\\")
+        .replace('"', '\\"')
+        .replace("\n", "\\n")
+        .replace("\r", "\\r")
+        .replace("\t", "\\t")
+    )
 
 
 class OutputHandler:
@@ -99,17 +106,25 @@ class OutputHandler:
             {send_cmd}
         end tell
         '''
-        try:
-            result = subprocess.run(["osascript", "-e", script], check=True, capture_output=True, timeout=5)
-            if clipboard_restore:
-                _restore_clipboard(saved_clipboard)
-            return True
-        except Exception as exc:
-            LOG.debug(f"paste_and_send failed: {exc}, falling back to type_text")
-            OutputHandler.type_and_send(text, send_key)
-            if clipboard_restore:
-                _restore_clipboard(saved_clipboard)
-            return False
+        # Retry paste up to 3 times (clipboard can be transiently locked)
+        for attempt in range(3):
+            try:
+                subprocess.run(["osascript", "-e", script], check=True, capture_output=True, timeout=5)
+                if clipboard_restore:
+                    _restore_clipboard(saved_clipboard)
+                return True
+            except Exception as exc:
+                if attempt < 2:
+                    LOG.debug(f"paste_and_send attempt {attempt + 1} failed: {exc}, retrying...")
+                    time.sleep(0.1)
+                    pyperclip.copy(text)  # Re-copy in case clipboard was stolen
+                else:
+                    LOG.warning(f"paste_and_send failed after 3 attempts: {exc}, falling back to type_text")
+                    OutputHandler.type_and_send(text, send_key)
+                    if clipboard_restore:
+                        _restore_clipboard(saved_clipboard)
+                    return False
+        return False
 
     @staticmethod
     def paste_only(text, append=False, clipboard_restore=True):
@@ -124,17 +139,24 @@ class OutputHandler:
             keystroke "v" using command down
         end tell
         '''
-        try:
-            result = subprocess.run(["osascript", "-e", script], check=True, capture_output=True, timeout=5)
-            if clipboard_restore:
-                _restore_clipboard(saved_clipboard)
-            return True
-        except Exception as exc:
-            LOG.debug(f"paste_only failed: {exc}, falling back to type_text")
-            OutputHandler.type_text(text)
-            if clipboard_restore:
-                _restore_clipboard(saved_clipboard)
-            return False
+        for attempt in range(3):
+            try:
+                subprocess.run(["osascript", "-e", script], check=True, capture_output=True, timeout=5)
+                if clipboard_restore:
+                    _restore_clipboard(saved_clipboard)
+                return True
+            except Exception as exc:
+                if attempt < 2:
+                    LOG.debug(f"paste_only attempt {attempt + 1} failed: {exc}, retrying...")
+                    time.sleep(0.1)
+                    pyperclip.copy(text)
+                else:
+                    LOG.warning(f"paste_only failed after 3 attempts: {exc}, falling back to type_text")
+                    OutputHandler.type_text(text)
+                    if clipboard_restore:
+                        _restore_clipboard(saved_clipboard)
+                    return False
+        return False
 
     @staticmethod
     def copy_only(text):

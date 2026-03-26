@@ -167,7 +167,7 @@ class KeyListener:
                 self._fn_monitor = FnKeyMonitor(self.on_press_cb, self.on_release_cb)
                 self._fn_monitor.start()
             else:
-                print("PTT: Quartz not available for Fn key detection")
+                LOG.error("PTT: Quartz not available for Fn key detection")
         else:
             # Use pynput for all other keys.
             if HAS_PYNPUT:
