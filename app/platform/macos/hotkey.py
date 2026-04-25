@@ -61,15 +61,31 @@ class FnKeyMonitor:
         self._fn_down = False
 
     def _callback(self, proxy, event_type, event, refcon):
+        # macOS disables event taps whose callback exceeds the timeout (or on
+        # user input bursts). The system delivers these special event types to
+        # signal that, and we MUST re-enable the tap or the Fn key goes silent
+        # for the rest of the session.
+        if event_type == Quartz.kCGEventTapDisabledByTimeout or \
+                event_type == Quartz.kCGEventTapDisabledByUserInput:
+            if self._tap is not None:
+                try:
+                    Quartz.CGEventTapEnable(self._tap, True)
+                except Exception as exc:
+                    LOG.debug(f"Failed to re-enable Fn event tap: {exc}")
+            return event
+
         flags = Quartz.CGEventGetFlags(event)
         fn_now = bool(flags & _FN_FLAG)
 
         if fn_now and not self._fn_down:
             self._fn_down = True
-            self.on_press_cb()
+            # Dispatch the press callback off the event-tap thread so slow
+            # AppKit work (NSWorkspace, haptics, etc.) cannot exceed the tap
+            # timeout and get the tap auto-disabled.
+            threading.Thread(target=self.on_press_cb, daemon=True).start()
         elif not fn_now and self._fn_down:
             self._fn_down = False
-            self.on_release_cb()
+            threading.Thread(target=self.on_release_cb, daemon=True).start()
 
         return event
 
