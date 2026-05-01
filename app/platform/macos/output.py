@@ -33,9 +33,10 @@ def _restore_clipboard(saved):
     def _do_restore():
         time.sleep(0.15)
         try:
-            proc = subprocess.Popen(
-                ["pbcopy"], stdin=subprocess.PIPE, timeout=2
-            )
+            # subprocess.Popen does not accept timeout=, only run() and
+            # communicate() do. Putting it on Popen made every restore raise
+            # immediately, leaving the clipboard with the dictation result.
+            proc = subprocess.Popen(["pbcopy"], stdin=subprocess.PIPE)
             proc.communicate(input=saved.encode("utf-8"), timeout=2)
         except Exception as exc:
             LOG.debug(f"Failed to restore clipboard: {exc}")

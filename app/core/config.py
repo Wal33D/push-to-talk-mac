@@ -40,12 +40,20 @@ DEFAULT_CONFIG = {
     "vad_silence_threshold": 500,  # Energy threshold for VAD tail buffer
     "vad_tail_max": 1.5,  # Max seconds to continue recording after key release
     "auto_output_mode": False,  # Auto-select output mode based on focused app
-    "noise_gate": 150,  # RMS threshold below which audio is considered ambient noise
+    "noise_gate": 50,  # RMS threshold below which audio is considered ambient noise
     "per_app_config": {},  # Per-app overrides: {"bundle_id": {"output_mode": "...", "send_key": "..."}}
     "hud_position": "bottom",  # HUD position: "bottom" or "top"
 }
 
 VALID_OUTPUT_MODES = {"paste_send", "paste_only", "type_send", "type_only", "copy_only"}
+
+# Legacy default values that we now know were too aggressive and silently
+# broke recordings. Migrated forward on load. Keys are config field names,
+# values are (legacy_value, new_value) pairs. Add new entries here whenever
+# we lower a default that already shipped to users.
+LEGACY_DEFAULT_MIGRATIONS = {
+    "noise_gate": (150, 50),
+}
 
 _LOG = logging.getLogger("pusha")
 
@@ -64,6 +72,28 @@ def normalize_config(config):
     return normalized
 
 
+def migrate_legacy_defaults(config):
+    """Bump fields that still hold a known-bad legacy default to the new one.
+
+    Why: when we lower a default in code (e.g. noise_gate 150 -> 50), users
+    with an existing config keep the old value forever, so the fix never
+    reaches them. This walks the LEGACY_DEFAULT_MIGRATIONS table and rewrites
+    matching values in place. Returns (config, changed) so callers can persist
+    the new values.
+    """
+    if not isinstance(config, dict):
+        return config, False
+    changed = False
+    for key, (legacy_value, new_value) in LEGACY_DEFAULT_MIGRATIONS.items():
+        if config.get(key) == legacy_value:
+            _LOG.info(
+                f"Migrating legacy default for {key}: {legacy_value} -> {new_value}"
+            )
+            config[key] = new_value
+            changed = True
+    return config, changed
+
+
 def load_config():
     """Load config from file or create default."""
     try:
@@ -71,7 +101,11 @@ def load_config():
         if CONFIG_FILE.exists():
             with open(CONFIG_FILE, encoding="utf-8") as f:
                 saved = json.load(f)
-                return normalize_config(saved)
+            normalized = normalize_config(saved)
+            normalized, changed = migrate_legacy_defaults(normalized)
+            if changed:
+                save_config(normalized)
+            return normalized
     except Exception as exc:
         _LOG.warning(f"Failed to load config from {CONFIG_FILE}: {exc}")
     return normalize_config({})
