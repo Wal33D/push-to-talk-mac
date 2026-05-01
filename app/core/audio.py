@@ -91,7 +91,12 @@ class AudioEngine:
         return [norm_bytes[i:i + chunk_size] for i in range(0, len(norm_bytes), chunk_size)]
 
     def record_until_released(self, stop_event, level_callback=None, time_callback=None, tail_callback=None):
-        """Record audio until stop_event is set (key released). For PTT mode."""
+        """Record audio until stop_event is set (key released). For PTT mode.
+
+        Returns the path to a wav file on success, or a dict with a "reason"
+        key (and supporting context fields) on failure so the caller can
+        surface a specific message in the HUD instead of a generic "(too short)".
+        """
         p = pyaudio.PyAudio()
 
         try:
@@ -110,7 +115,7 @@ class AudioEngine:
             LOG.error(f"PTT: Failed to open audio stream: {exc}")
             self.state_callback(AppState.ERROR)
             p.terminate()
-            return None
+            return {"reason": "stream_open_failed", "error": str(exc)}
 
         frames = []
         rate = self.config["rate"]
@@ -191,7 +196,7 @@ class AudioEngine:
         except Exception as exc:
             LOG.error(f"PTT recording error: {exc}")
             self.state_callback(AppState.ERROR)
-            return None
+            return {"reason": "recording_error", "error": str(exc)}
         finally:
             stream.stop_stream()
             stream.close()
@@ -200,7 +205,7 @@ class AudioEngine:
         min_useful_chunks = int(MIN_USEFUL_SECONDS * rate / chunk)
         if total_chunks < min_useful_chunks:
             LOG.info(f"PTT: Recording too short ({total_chunks} chunks < {min_useful_chunks} min), skipping")
-            return None
+            return {"reason": "too_short", "chunks": total_chunks, "min_chunks": min_useful_chunks}
 
         # Noise gate — skip if audio was just ambient noise
         rms = self.get_rms_level(frames)
@@ -208,7 +213,7 @@ class AudioEngine:
         LOG.info(f"PTT: Audio RMS={rms}, noise_gate={noise_gate}, chunks={total_chunks}")
         if rms < noise_gate:
             LOG.info(f"PTT: Audio below noise gate (RMS {rms} < {noise_gate}), skipping")
-            return None
+            return {"reason": "too_quiet", "rms": rms, "noise_gate": noise_gate}
 
         # Normalize audio levels for consistent Whisper input
         frames = self.normalize_audio(frames)
@@ -225,5 +230,5 @@ class AudioEngine:
                 return f.name
         except Exception as exc:
             LOG.error(f"PTT: Failed to save audio: {exc}")
-            return None
+            return {"reason": "save_failed", "error": str(exc)}
 

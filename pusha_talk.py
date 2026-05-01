@@ -875,6 +875,30 @@ class PushaTalkApp(rumps.App):
         if CONFIG.get("haptic_feedback", True):
             trigger_haptic()
 
+    @staticmethod
+    def _format_failure_message(info):
+        """Turn an audio-engine failure dict into a short HUD message.
+
+        Why: "(too short)" used to be shown for every failure (including
+        the noise-gate trip), which made silent failures impossible to
+        diagnose at a glance. Now the user sees the actual cause and the
+        relevant number (RMS for too-quiet, chunk count for too-short).
+        """
+        if not isinstance(info, dict):
+            return "(no audio)"
+        reason = info.get("reason", "unknown")
+        if reason == "too_quiet":
+            return f"(too quiet: RMS {info.get('rms', '?')} < {info.get('noise_gate', '?')})"
+        if reason == "too_short":
+            return f"(too short: {info.get('chunks', '?')} chunks)"
+        if reason == "stream_open_failed":
+            return "(mic unavailable, check input device)"
+        if reason == "save_failed":
+            return "(save failed)"
+        if reason == "recording_error":
+            return "(recording error)"
+        return f"({reason})"
+
     def _ptt_record_and_transcribe(self):
         """Record while key held, then transcribe and output. Runs in daemon thread."""
         try:
@@ -888,14 +912,18 @@ class PushaTalkApp(rumps.App):
             if self.continuous_mode:
                 self.hud.set_continuous(True)
 
-            audio_file = self.audio_engine.record_until_released(
+            result = self.audio_engine.record_until_released(
                 self.ptt_stop_event,
                 level_callback=self.hud.update_audio_level,
                 time_callback=self.hud.update_record_time,
                 tail_callback=self.hud.set_in_tail,
             )
 
-            log.info(f"record_until_released returned: {audio_file}")
+            # record_until_released returns a path on success, dict on failure
+            audio_file = result if isinstance(result, str) else None
+            failure_info = result if isinstance(result, dict) else None
+
+            log.info(f"record_until_released returned: {result}")
 
             if audio_file:
                 try:
@@ -945,9 +973,14 @@ class PushaTalkApp(rumps.App):
                 else:
                     log.warning("Text was None or empty — skipped output")
                     self.hud.set_result_preview("(no speech detected)")
+                    time.sleep(1.5)
             else:
-                log.warning("No audio file returned (too short?)")
-                self.hud.set_result_preview("(too short)")
+                # Show the actual reason in the HUD instead of a generic
+                # "(too short)" so silent failures stop being mysterious.
+                msg = self._format_failure_message(failure_info)
+                log.warning(f"PTT skipped: {failure_info}")
+                self.hud.set_result_preview(msg)
+                time.sleep(1.5)  # keep the message readable before READY clears it
         except Exception as e:
             log.error(f"PTT error: {e}", exc_info=True)
         finally:
