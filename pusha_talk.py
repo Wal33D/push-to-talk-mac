@@ -83,23 +83,6 @@ except ImportError:
 __version__ = "2.1.0"
 __author__ = "Waleed Judah"
 
-# Snapshot of the source-file mtimes at process start, used to detect when
-# the user has pulled new code but the daemon is still running stale code in
-# memory. See _check_source_freshness().
-_SOURCE_FRESHNESS_FILES = [
-    Path(__file__).resolve(),
-    Path(__file__).resolve().parent / "app" / "core" / "audio.py",
-    Path(__file__).resolve().parent / "app" / "core" / "config.py",
-    Path(__file__).resolve().parent / "app" / "platform" / "macos" / "output.py",
-    Path(__file__).resolve().parent / "app" / "platform" / "macos" / "hotkey.py",
-]
-try:
-    _STARTUP_SOURCE_MTIME = max(
-        p.stat().st_mtime for p in _SOURCE_FRESHNESS_FILES if p.exists()
-    )
-except Exception:
-    _STARTUP_SOURCE_MTIME = 0.0
-
 # ============================================================================
 # CONFIGURATION
 # ============================================================================
@@ -852,8 +835,6 @@ class PushaTalkApp(rumps.App):
         if self.state == State.LOADING:
             return
 
-        self._check_source_freshness()
-
         # Double-tap detection: two presses within 400ms → continuous mode
         double_tap = (now - self._last_press_time) < 0.4
         self._last_press_time = now
@@ -893,36 +874,6 @@ class PushaTalkApp(rumps.App):
         # Haptic feedback on release
         if CONFIG.get("haptic_feedback", True):
             trigger_haptic()
-
-    def _check_source_freshness(self):
-        """Warn (once) if source files on disk are newer than this process.
-
-        Why: the daemon is long-running. When the user pulls new code, the
-        already-running interpreter keeps using the old in-memory modules
-        and the fix never reaches them, which is the actual cause of the
-        "we fix it and it breaks again every other day" cycle. We can't
-        hot-reload, but we can tell the user to restart.
-        """
-        if getattr(self, "_freshness_warned", False):
-            return
-        try:
-            current = max(
-                p.stat().st_mtime
-                for p in _SOURCE_FRESHNESS_FILES
-                if p.exists()
-            )
-        except Exception:
-            return
-        if current > _STARTUP_SOURCE_MTIME + 1.0:
-            self._freshness_warned = True
-            log.warning(
-                "Source files on disk are newer than this process. "
-                "Restart the app to pick up the latest code."
-            )
-            try:
-                self.hud.set_result_preview("(restart me, code updated)")
-            except Exception:
-                pass
 
     @staticmethod
     def _format_failure_message(info):
